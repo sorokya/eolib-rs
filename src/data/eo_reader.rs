@@ -17,6 +17,50 @@ pub enum EoReaderError {
 }
 
 #[derive(Debug)]
+/// A reader for reading data from an EO data stream
+///
+/// # Examples
+///
+/// ```
+/// use bytes::Bytes;
+/// use eolib::data::EoReader;
+///
+/// let data = Bytes::from_static(&[1, 43, 11, 254]);
+/// let reader = EoReader::new(data);
+///
+/// assert_eq!(reader.get_byte().unwrap(), 1);
+/// assert_eq!(reader.get_char().unwrap(), 42);
+/// assert_eq!(reader.get_short().unwrap(), 10);
+/// assert_eq!(reader.remaining().unwrap(), 0);
+/// ```
+///
+/// ## Chunked reading mode
+///
+/// ```
+/// use bytes::Bytes;
+/// use eolib::data::EoReader;
+///
+/// let data = Bytes::from_static(&[43, 255, 72, 101, 108, 108, 111, 255, 2]);
+/// let reader = EoReader::new(data);
+///
+/// reader.set_chunked_reading_mode(true);
+///
+/// // Reads an integer (4 bytes) but only advances the cursor by one byte, accounting for
+/// // the first chunk being a single byte.
+/// assert_eq!(reader.get_int().unwrap(), 42);
+///
+/// // Advances the cursor to the next chunk
+/// reader.next_chunk().unwrap();
+///
+/// assert_eq!(reader.get_string().unwrap(), "Hello");
+///
+/// // Advances the cursor to the next chunk
+/// reader.next_chunk().unwrap();
+///
+/// // Reads an integer (4 bytes) but only advances the cursor by one byte, accounting for
+/// // the last chunk
+/// assert_eq!(reader.get_int().unwrap(), 1);
+/// ````
 pub struct EoReader {
     data: Bytes,
     position: Cell<usize>,
@@ -26,6 +70,7 @@ pub struct EoReader {
 }
 
 impl EoReader {
+    /// creates a new [EoReader] with the specified data
     pub fn new(data: Bytes) -> Self {
         Self {
             data,
@@ -57,7 +102,7 @@ impl EoReader {
     ///
     /// in chunked reading mode:
     /// * the reader will treat `0xFF` bytes as the end of the current chunk
-    /// * [next_chunk] can be called to move to the next chunk
+    /// * [next_chunk](EoReader::next_chunk) can be called to move to the next chunk
     pub fn set_chunked_reading_mode(&self, enabled: bool) {
         self.chunked_reading_mode.set(enabled);
         let next_break = self.next_break.get();
@@ -94,7 +139,7 @@ impl EoReader {
     fn find_next_break_index(&self) -> usize {
         let position = self.position.get();
         match self.data.iter().skip(position).position(|b| *b == 0xff) {
-            Some(index) => index,
+            Some(index) => position + index,
             None => self.data.len(),
         }
     }
@@ -143,13 +188,14 @@ impl EoReader {
 
     /// returns a [String] from the data stream
     pub fn get_string(&self) -> Result<String, EoReaderError> {
-        self.get_fixed_string(self.remaining()?)
+        let remaining = self.remaining()?;
+        self.get_fixed_string(remaining)
     }
 
     /// returns a [String] from the data stream with a fixed length
     ///
     /// if `length` is `0` then an empty [String] is returned
-    /// increases the read position by [length]
+    /// increases the read position by length
     pub fn get_fixed_string(&self, length: usize) -> Result<String, EoReaderError> {
         if length == 0 {
             return Ok(String::new());
@@ -184,6 +230,7 @@ impl EoReader {
             Some(buf) => buf,
             None => return Err(EoReaderError::DataNotFound { position, length }),
         };
+        self.position.set(position + length);
         Ok(buf)
     }
 }

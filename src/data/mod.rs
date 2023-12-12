@@ -7,6 +7,9 @@ pub const SHORT_MAX: i32 = CHAR_MAX * CHAR_MAX;
 /// The maximum value of an EO three (3-byte encoded integer type)
 pub const THREE_MAX: i32 = CHAR_MAX * CHAR_MAX * CHAR_MAX;
 
+/// The maximum value of an EO int (4-byte encoded integer type)
+pub const INT_MAX: i32 = i32::MAX;
+
 /// Returns an encoded byte array from `number`
 ///
 /// EO uses a maximum of four bytes to represent a number
@@ -31,10 +34,6 @@ pub const THREE_MAX: i32 = CHAR_MAX * CHAR_MAX * CHAR_MAX;
 /// Byte 1 is simply the remaining `number` plus one.
 ///
 /// `bytes[0] = number + 1`
-///
-/// # Panics
-///
-/// This function will panic if `number` exceeds [MAX4].
 ///
 /// # Examples
 ///
@@ -181,39 +180,60 @@ pub fn decode_number(bytes: &[u8]) -> i32 {
         + data[0] as i32
 }
 
+/// Decodes a string in place
+///
+/// This is used for map names and sign text in map files
+///
+/// # Examples
+///
+/// ```
+/// use eolib::data::decode_string;
+///
+/// let mut buf = [0x69, 0x36, 0x5E, 0x49];
+/// decode_string(&mut buf);
+///
+/// let name = String::from_utf8_lossy(&buf).to_string();
+/// assert_eq!(name, "Void");
+/// ````
 pub fn decode_string(buf: &mut [u8]) {
     buf.reverse();
 
-    let mut flippy = buf.len() % 2 == 1;
+    let parity = (buf.len() + 1) % 2;
 
-    for c in buf {
-        if flippy {
-            if (0x22..=0x4F).contains(c) {
-                *c = 0x71 - *c;
-            } else if (0x50..=0x7E).contains(c) {
-                *c = 0xCD - *c;
-            }
-        } else if (0x22..=0x7E).contains(c) {
-            *c = 0x9F - *c;
-        }
-        flippy = !flippy;
+    for (i, c) in buf.iter_mut().enumerate() {
+        *c = match (i % 2 != parity, *c) {
+            (true, ch @ 34..=125) => 125 - ch + 34,
+            (false, ch @ 34..=79) => 79 - ch + 34,
+            (false, ch @ 80..=125) => 125 - ch + 80,
+            _ => *c,
+        };
     }
 }
 
+/// Encodes a string in place
+///
+/// This is used for map names and sign text in map files
+///
+/// # Examples
+///
+/// ```
+/// use eolib::data::encode_string;
+///
+/// let mut buf = b"Void".to_vec();
+/// encode_string(&mut buf);
+///
+/// assert_eq!(buf, [0x69, 0x36, 0x5E, 0x49]);
+/// ````
 pub fn encode_string(buf: &mut [u8]) {
-    let mut flippy = buf.len() % 2 == 1;
+    let parity = (buf.len() + 1) % 2;
 
-    for c in buf {
-        if flippy {
-            if (0x22..=0x4F).contains(c) {
-                *c = 0x71 - *c;
-            } else if (0x50..=0x7E).contains(c) {
-                *c = 0xCD - *c;
-            }
-        } else if (0x22..=0x7E).contains(c) {
-            *c = 0x9F - *c;
-        }
-        flippy = !flippy;
+    for (i, c) in buf.iter_mut().enumerate() {
+        *c = match (i % 2 != parity, *c) {
+            (true, ch @ 34..=125) => 125 - ch + 34,
+            (false, ch @ 34..=79) => 79 - ch + 34,
+            (false, ch @ 80..=125) => 125 - ch + 80,
+            _ => *c,
+        };
     }
 
     buf.reverse();
@@ -221,3 +241,5 @@ pub fn encode_string(buf: &mut [u8]) {
 
 mod eo_reader;
 pub use eo_reader::EoReader;
+mod eo_writer;
+pub use eo_writer::EoWriter;

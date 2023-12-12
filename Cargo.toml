@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 bytes = "1.5.0"
 encoding_rs = "0.8.33"
+rand = "0.8.5"
 thiserror = "1.0"
 
 [build-dependencies]

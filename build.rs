@@ -112,9 +112,9 @@ struct Array {
     pub data_type: String,
     #[serde(rename = "@length")]
     pub length: Option<String>,
-    #[serde(rename = "optional")]
+    #[serde(rename = "@optional")]
     pub optional: Option<bool>,
-    #[serde(rename = "delimited")]
+    #[serde(rename = "@delimited")]
     pub delimited: Option<bool>,
     #[serde(rename = "@trailing-delimiter")]
     #[serde(default = "default_as_true")]
@@ -640,7 +640,9 @@ fn write_struct(
                         StructElement::Field(field) => {
                             generate_deserialize_field(code, field, enums, structs)
                         }
-                        StructElement::Array(_) => {}
+                        StructElement::Array(array) => {
+                            generate_deserialize_array(code, array, enums, structs)
+                        }
                         StructElement::Switch(_) => {}
                         _ => {}
                     }
@@ -653,7 +655,7 @@ fn write_struct(
                 generate_deserialize_length(code, length);
             }
             StructElement::Field(field) => generate_deserialize_field(code, field, enums, structs),
-            StructElement::Array(_) => {}
+            StructElement::Array(array) => generate_deserialize_array(code, array, enums, structs),
             StructElement::Switch(_) => {}
             _ => {}
         }
@@ -721,6 +723,26 @@ fn generate_deserialize_field(
     }
 }
 
+fn generate_deserialize_array(
+    code: &mut String,
+    array: &Array,
+    enums: &[Enum],
+    structs: &[Struct],
+) {
+    let optional = match array.optional {
+        Some(true) => true,
+        _ => false,
+    };
+
+    if optional {
+        code.push_str("        if reader.remaining()? > 0 {{\n");
+        generate_inner_array_deserialize(code, array, enums, structs);
+        code.push_str("        }\n");
+    } else {
+        generate_inner_array_deserialize(code, array, enums, structs);
+    }
+}
+
 fn generate_inner_field_deserialize(
     code: &mut String,
     field: &Field,
@@ -771,6 +793,63 @@ fn generate_inner_field_deserialize(
             }
         }
     }
+}
+
+fn generate_inner_array_deserialize(
+    code: &mut String,
+    array: &Array,
+    enums: &[Enum],
+    structs: &[Struct],
+) {
+    let delimited = match array.delimited {
+        Some(true) => true,
+        _ => false,
+    };
+
+    let need_guard = !array.trailing_delimiter && array.length.is_some();
+
+    if let Some(length) = &array.length {
+        code.push_str(&format!(
+            "        for {} in 0..{} {{\n",
+            if need_guard { "i" } else { "_" },
+            length
+        ));
+    } else {
+        code.push_str("        while reader.remaining()? > 0 {\n");
+    }
+
+    code.push_str(&format!("            data.{}.push(", array.name));
+    generate_inner_field_deserialize(
+        code,
+        &Field {
+            name: None,
+            data_type: array.data_type.clone(),
+            value: None,
+            comment: None,
+            padded: None,
+            optional: None,
+            length: None,
+        },
+        enums,
+        structs,
+    );
+    code.push_str(");\n");
+
+    if delimited {
+        if need_guard {
+            let length = match &array.length {
+                Some(length) => length,
+                None => panic!("Array length is required for non trailing- delimited arrays!"),
+            };
+            code.push_str(&format!("            if i + 1 < {} {{\n", length));
+            code.push_str("                reader.next_chunk()?;\n");
+            code.push_str("            }\n");
+        } else {
+            code.push_str("            reader.next_chunk()?;\n");
+        }
+    }
+
+    code.push_str("        }\n");
 }
 
 fn write_struct_fields(code: &mut String, struct_name: &str, elements: &[StructElement]) {

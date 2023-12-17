@@ -14,6 +14,14 @@ pub enum EoReaderError {
     DataNotFound { position: usize, length: usize },
     #[error("Chunked reading mode is disabled")]
     ChunkedReadingDisabled,
+    #[error("{0}")]
+    Other(String),
+}
+
+impl From<String> for EoReaderError {
+    fn from(s: String) -> Self {
+        Self::Other(s)
+    }
 }
 
 #[derive(Debug)]
@@ -98,6 +106,11 @@ impl EoReader {
         }
     }
 
+    /// returns the current chunked reading mode for the reader
+    pub fn get_chunked_reading_mode(&self) -> bool {
+        self.chunked_reading_mode.get()
+    }
+
     /// sets the chunked reading mode for the reader
     ///
     /// in chunked reading mode:
@@ -154,8 +167,8 @@ impl EoReader {
     /// returns a [u8] slice from the data stream
     ///
     /// increases the read position by `length`
-    pub fn get_bytes(&self, length: usize) -> Result<&[u8], EoReaderError> {
-        self.read_bytes(length)
+    pub fn get_bytes(&self, length: usize) -> Result<Vec<u8>, EoReaderError> {
+        Ok(self.read_bytes(length)?.to_vec())
     }
 
     /// returns a single [u8] from the data stream decoded into an [i32]

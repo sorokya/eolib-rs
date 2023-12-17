@@ -240,6 +240,8 @@ pub fn encode_string(buf: &mut [u8]) {
 }
 
 mod eo_reader;
-pub use eo_reader::EoReader;
+pub use eo_reader::{EoReader, EoReaderError};
 mod eo_writer;
-pub use eo_writer::EoWriter;
+pub use eo_writer::{EoWriter, EoWriterError};
+mod eo_serialize;
+pub use eo_serialize::{EoSerialize, EoSerializeError};

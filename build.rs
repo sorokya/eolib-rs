@@ -28,7 +28,7 @@ enum Element {
     Packet(Packet),
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct Enum {
     #[serde(rename = "@name")]
     pub name: String,
@@ -38,7 +38,7 @@ struct Enum {
     pub elements: Vec<EnumElement>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 enum EnumElement {
     #[serde(rename = "comment")]
     Comment(String),
@@ -46,7 +46,7 @@ enum EnumElement {
     Value(EnumValue),
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct EnumValue {
     #[serde(rename = "@name")]
     pub name: String,
@@ -56,7 +56,7 @@ struct EnumValue {
     pub value: i32,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct Struct {
     #[serde(rename = "@name")]
     pub name: String,
@@ -64,7 +64,7 @@ struct Struct {
     pub elements: Vec<StructElement>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "lowercase")]
 enum StructElement {
     Break,
@@ -77,13 +77,13 @@ enum StructElement {
     Switch(Switch),
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct Chunked {
     #[serde(rename = "$value", default)]
     pub elements: Vec<StructElement>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct Field {
     #[serde(rename = "@name")]
     pub name: Option<String>,
@@ -92,9 +92,11 @@ struct Field {
     #[serde(rename = "$value", default)]
     pub value: Option<String>,
     pub comment: Option<String>,
-    #[serde(rename = "padded")]
+    #[serde(rename = "@padded")]
     pub padded: Option<bool>,
-    #[serde(rename = "optional")]
+    #[serde(rename = "@optional")]
+    pub optional: Option<bool>,
+    #[serde(rename = "@length")]
     pub length: Option<String>,
 }
 
@@ -102,7 +104,7 @@ fn default_as_true() -> bool {
     true
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct Array {
     #[serde(rename = "@name")]
     pub name: String,
@@ -120,7 +122,7 @@ struct Array {
     pub comment: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct Length {
     #[serde(rename = "@name")]
     pub name: String,
@@ -132,7 +134,7 @@ struct Length {
     pub offset: Option<i32>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct Dummy {
     #[serde(rename = "@type")]
     pub data_type: String,
@@ -140,7 +142,7 @@ struct Dummy {
     pub value: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct Switch {
     #[serde(rename = "@field")]
     pub field: String,
@@ -148,7 +150,7 @@ struct Switch {
     pub cases: Vec<Case>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(rename = "case")]
 struct Case {
     #[serde(rename = "@default")]
@@ -159,7 +161,7 @@ struct Case {
     pub elements: Option<Vec<StructElement>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct Packet {
     #[serde(rename = "@action")]
     pub action: String,
@@ -210,6 +212,28 @@ fn main() {
         std::fs::remove_dir_all("src/protocol").unwrap();
     }
 
+    let enums: Vec<Enum> = protocols
+        .iter()
+        .map(|(protocol, _)| {
+            protocol.elements.iter().filter_map(|e| match e {
+                Element::Enum(protocol_enum) => Some(protocol_enum.clone()),
+                _ => None,
+            })
+        })
+        .flatten()
+        .collect();
+
+    let structs: Vec<Struct> = protocols
+        .iter()
+        .map(|(protocol, _)| {
+            protocol.elements.iter().filter_map(|e| match e {
+                Element::Struct(protocol_struct) => Some(protocol_struct.clone()),
+                _ => None,
+            })
+        })
+        .flatten()
+        .collect();
+
     for (protocol, path) in &protocols {
         let output_dir = get_output_directory(path);
         std::fs::create_dir_all(&output_dir).unwrap();
@@ -224,12 +248,27 @@ fn main() {
                 }
                 Element::Struct(protocol_struct) => {
                     let imports = get_imports(&protocol_struct.elements, &protocols);
-                    generate_struct_file(protocol_struct, imports, &output_dir, &mut mod_code)
-                        .unwrap();
+                    generate_struct_file(
+                        protocol_struct,
+                        imports,
+                        &output_dir,
+                        &mut mod_code,
+                        &enums,
+                        &structs,
+                    )
+                    .unwrap();
                 }
                 Element::Packet(packet) => {
                     let imports = get_imports(&packet.elements, &protocols);
-                    generate_packet_file(packet, imports, &output_dir, &mut mod_code).unwrap();
+                    generate_packet_file(
+                        packet,
+                        imports,
+                        &output_dir,
+                        &mut mod_code,
+                        &enums,
+                        &structs,
+                    )
+                    .unwrap();
                 }
             }
         }
@@ -295,34 +334,47 @@ fn generate_enum_file(
     }
     code.push_str("}\n\n");
 
-    code.push_str(&format!("impl {} {{\n", protocol_enum.name));
     code.push_str(&format!(
-        "    pub fn from_i32(value: i32) -> Option<Self> {{\n"
+        "impl TryFrom<i32> for {} {{\n",
+        protocol_enum.name
+    ));
+    code.push_str(&format!("    type Error = String;\n"));
+    code.push_str(&format!(
+        "    fn try_from(value: i32) -> Result<Self, <{} as TryFrom<i32>>::Error> {{\n",
+        protocol_enum.name
     ));
     code.push_str(&format!("        match value {{\n"));
 
     for variant in &variants {
         code.push_str(&format!(
-            "            {} => Some(Self::{}),\n",
+            "            {} => Ok(Self::{}),\n",
             variant.value,
             replace_keyword(&variant.name)
         ));
     }
 
-    code.push_str(&format!("            _ => None,\n"));
+    code.push_str(&format!(
+        "            _ => Err(format!(\"Invalid value for {}: {{}}\", value)),\n",
+        protocol_enum.name
+    ));
     code.push_str(&format!("        }}\n"));
-    code.push_str(&format!("    }}\n\n"));
-    code.push_str(&format!("    pub fn to_i32(&self) -> i32 {{\n"));
-    code.push_str(&format!("        match self {{\n"));
+    code.push_str(&format!("    }}\n"));
+    code.push_str(&format!("}}\n\n"));
 
+    code.push_str(&format!("impl From<{}> for i32 {{\n", protocol_enum.name));
+    code.push_str(&format!(
+        "    fn from(value: {}) -> Self {{\n",
+        protocol_enum.name
+    ));
+    code.push_str(&format!("        match value {{\n"));
     for variant in &variants {
         code.push_str(&format!(
-            "            Self::{} => {},\n",
+            "            {}::{} => {},\n",
+            protocol_enum.name,
             replace_keyword(&variant.name),
             variant.value
         ));
     }
-
     code.push_str(&format!("        }}\n"));
     code.push_str(&format!("    }}\n"));
     code.push_str(&format!("}}\n\n"));
@@ -356,6 +408,8 @@ fn generate_struct_file(
     imports: Vec<String>,
     path: &PathBuf,
     mod_code: &mut String,
+    enums: &[Enum],
+    structs: &[Struct],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut code = String::new();
     code.push_str(CODEGEN_WARNING);
@@ -368,14 +422,20 @@ fn generate_struct_file(
         code.push_str("\n");
     }
 
-    write_struct(&protocol_struct.name, &protocol_struct.elements, &mut code);
+    write_struct(
+        &protocol_struct.name,
+        &protocol_struct.elements,
+        &mut code,
+        enums,
+        structs,
+    );
 
     for switch in protocol_struct.elements.iter().filter_map(|e| match e {
         StructElement::Switch(switch) => Some(switch),
         _ => None,
     }) {
         let name = get_field_type(&format!("{}_{}_data", protocol_struct.name, switch.field));
-        generate_switch_code(&name, &mut code, switch);
+        generate_switch_code(&name, &mut code, switch, enums, structs);
     }
 
     code.push_str(CODEGEN_WARNING);
@@ -396,6 +456,8 @@ fn generate_packet_file(
     imports: Vec<String>,
     path: &PathBuf,
     mod_code: &mut String,
+    enums: &[Enum],
+    structs: &[Struct],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut code = String::new();
     code.push_str(CODEGEN_WARNING);
@@ -417,14 +479,14 @@ fn generate_packet_file(
 
     let name = format!("{}{}{}Packet", packet.family, packet.action, source);
 
-    write_struct(&name, &packet.elements, &mut code);
+    write_struct(&name, &packet.elements, &mut code, enums, structs);
 
     for switch in packet.elements.iter().filter_map(|e| match e {
         StructElement::Switch(switch) => Some(switch),
         _ => None,
     }) {
         let name = get_field_type(&format!("{}_{}_data", name, switch.field));
-        generate_switch_code(&name, &mut code, switch);
+        generate_switch_code(&name, &mut code, switch, enums, structs);
     }
 
     // Assumes no nested chunked elements
@@ -437,7 +499,7 @@ fn generate_packet_file(
             _ => None,
         }) {
             let name = get_field_type(&format!("{}_{}_data", name, switch.field));
-            generate_switch_code(&name, &mut code, switch);
+            generate_switch_code(&name, &mut code, switch, enums, structs);
         }
     }
 
@@ -454,7 +516,13 @@ fn generate_packet_file(
     Ok(())
 }
 
-fn generate_switch_code(name: &str, code: &mut String, switch: &Switch) {
+fn generate_switch_code(
+    name: &str,
+    code: &mut String,
+    switch: &Switch,
+    enums: &[Enum],
+    structs: &[Struct],
+) {
     code.push_str(&format!("#[derive(Debug, PartialEq, Eq)]\n"));
     code.push_str(&format!("pub enum {} {{\n", name));
     for case in switch.cases.iter().filter(|c| c.elements.is_some()) {
@@ -483,19 +551,25 @@ fn generate_switch_code(name: &str, code: &mut String, switch: &Switch) {
             _ => get_field_type(&format!("{}_{}", name, case.value.as_ref().unwrap())),
         };
 
-        write_struct(&name, elements, code);
+        write_struct(&name, elements, code, enums, structs);
 
         for switch in elements.iter().filter_map(|e| match e {
             StructElement::Switch(switch) => Some(switch),
             _ => None,
         }) {
             let name = get_field_type(&format!("{}_{}_data", name, switch.field));
-            generate_switch_code(&name, code, switch);
+            generate_switch_code(&name, code, switch, enums, structs);
         }
     }
 }
 
-fn write_struct(name: &str, elements: &[StructElement], code: &mut String) {
+fn write_struct(
+    name: &str,
+    elements: &[StructElement],
+    code: &mut String,
+    enums: &[Enum],
+    structs: &[Struct],
+) {
     let comments = match elements
         .iter()
         .find(|e| matches!(e, StructElement::Comment(_)))
@@ -524,6 +598,179 @@ fn write_struct(name: &str, elements: &[StructElement], code: &mut String) {
     code.push_str("        Self::default()\n");
     code.push_str("    }\n");
     code.push_str("}\n\n");
+
+    code.push_str(&format!("impl EoSerialize for {} {{\n", name));
+    code.push_str(&format!(
+        "    /// Serializes a [{}] into the given [EoWriter] instance\n",
+        name
+    ));
+    code.push_str(
+        "    fn serialize(&self, writer: &mut EoWriter) -> Result<(), EoSerializeError> {\n",
+    );
+    code.push_str("        Ok(())\n");
+    code.push_str("    }\n");
+    code.push_str(&format!(
+        "    /// Deserializes a [{}] from an [EoReader] instance\n",
+        name
+    ));
+    code.push_str("    fn deserialize(reader: &EoReader) -> Result<Self, EoReaderError> {\n");
+    code.push_str(
+        "        let current_chunked_readming_mode = reader.get_chunked_reading_mode();\n",
+    );
+    code.push_str("        let mut data = Self::default();\n");
+
+    for element in elements {
+        match element {
+            StructElement::Chunked(chunked) => {
+                code.push_str("        reader.set_chunked_reading_mode(true);\n");
+                for element in &chunked.elements {
+                    match element {
+                        StructElement::Break => {
+                            code.push_str("        reader.next_chunk()?;\n");
+                        }
+                        StructElement::Chunked(_) => {
+                            panic!("Nested chunked elements are not supported! {}", name);
+                        }
+                        StructElement::Length(length) => {
+                            generate_deserialize_length(code, length);
+                        }
+                        StructElement::Dummy(dummy) => {
+                            code.push_str(&format!("        reader.get_{}()?;\n", dummy.data_type));
+                        }
+                        StructElement::Field(field) => {
+                            generate_deserialize_field(code, field, enums, structs)
+                        }
+                        StructElement::Array(_) => {}
+                        StructElement::Switch(_) => {}
+                        _ => {}
+                    }
+                }
+            }
+            StructElement::Dummy(dummy) => {
+                code.push_str(&format!("        reader.get_{}()?;\n", dummy.data_type));
+            }
+            StructElement::Length(length) => {
+                generate_deserialize_length(code, length);
+            }
+            StructElement::Field(field) => generate_deserialize_field(code, field, enums, structs),
+            StructElement::Array(_) => {}
+            StructElement::Switch(_) => {}
+            _ => {}
+        }
+    }
+    code.push_str("        reader.set_chunked_reading_mode(current_chunked_readming_mode);\n");
+    code.push_str("        Ok(data)\n");
+    code.push_str("    }\n");
+    code.push_str("}\n\n");
+}
+
+fn generate_deserialize_length(code: &mut String, length: &Length) {
+    let optional = match length.optional {
+        Some(true) => true,
+        _ => false,
+    };
+
+    if optional {
+        code.push_str("if reader.remaining()? > 0 {{\n");
+    }
+
+    code.push_str(&format!(
+        "        let {} = reader.get_{}()?;\n",
+        replace_keyword(&length.name),
+        length.data_type
+    ));
+
+    if optional {
+        code.push_str("}\n");
+    }
+}
+
+fn generate_deserialize_field(
+    code: &mut String,
+    field: &Field,
+    enums: &[Enum],
+    structs: &[Struct],
+) {
+    let optional = match field.optional {
+        Some(true) => true,
+        _ => false,
+    };
+
+    if optional {
+        let name = match field.name {
+            Some(ref name) => name,
+            None => panic!("Field name is required for optional fields!"),
+        };
+
+        code.push_str(&format!(
+            "        data.{} = if reader.remaining()? > 0 {{\n",
+            replace_keyword(&name)
+        ));
+        code.push_str("            Some(");
+        generate_inner_field_deserialize(code, field, enums, structs);
+        code.push_str(")\n");
+        code.push_str("        } else {\n");
+        code.push_str("            None\n");
+        code.push_str("        };\n");
+    } else {
+        if let Some(name) = &field.name {
+            code.push_str(&format!("        data.{} = ", replace_keyword(&name)));
+        }
+        generate_inner_field_deserialize(code, field, enums, structs);
+        code.push_str(";\n");
+    }
+}
+
+fn generate_inner_field_deserialize(
+    code: &mut String,
+    field: &Field,
+    enums: &[Enum],
+    structs: &[Struct],
+) {
+    let (data_type, enum_data_type) = if field.data_type.contains(":") {
+        field.data_type.split_once(":").unwrap()
+    } else {
+        (field.data_type.as_str(), "")
+    };
+
+    if let Some(ref protocol_enum) = enums.iter().find(|e| e.name == data_type) {
+        // for the Foobar:short shit
+        let enum_data_type = if enum_data_type.is_empty() {
+            protocol_enum.data_type.to_string()
+        } else {
+            enum_data_type.to_string()
+        };
+        code.push_str(&format!(
+            "{}::try_from(reader.get_{}()?{})?",
+            get_field_type(&data_type),
+            enum_data_type,
+            if enum_data_type == "byte" {
+                " as i32"
+            } else {
+                ""
+            }
+        ));
+    } else if let Some(_) = structs.iter().find(|s| s.name == data_type) {
+        code.push_str(&format!("{}::deserialize(reader)?", field.data_type));
+    } else {
+        match data_type {
+            "blob" => code.push_str("reader.get_bytes(reader.remaining()?)?"),
+            "bool" => code.push_str(&format!(
+                "reader.get_{}()? == 1",
+                if enum_data_type.is_empty() {
+                    "char"
+                } else {
+                    enum_data_type
+                }
+            )),
+            _ => {
+                code.push_str(&format!("reader.get_{}()?", data_type));
+                if data_type == "byte" {
+                    code.push_str(" as i32");
+                }
+            }
+        }
+    }
 }
 
 fn write_struct_fields(code: &mut String, struct_name: &str, elements: &[StructElement]) {
@@ -534,6 +781,11 @@ fn write_struct_fields(code: &mut String, struct_name: &str, elements: &[StructE
                     continue;
                 }
 
+                let optional = match field.optional {
+                    Some(true) => true,
+                    _ => false,
+                };
+
                 let comments = match &field.comment {
                     Some(comment) => get_comments(comment),
                     None => vec![],
@@ -543,11 +795,19 @@ fn write_struct_fields(code: &mut String, struct_name: &str, elements: &[StructE
                     code.push_str(&format!("    /// {}\n", comment));
                 }
 
-                code.push_str(&format!(
-                    "    pub {}: {},\n",
-                    replace_keyword(&field.name.as_ref().unwrap()),
-                    get_field_type(&field.data_type)
-                ));
+                if optional {
+                    code.push_str(&format!(
+                        "    pub {}: Option<{}>,\n",
+                        replace_keyword(&field.name.as_ref().unwrap()),
+                        get_field_type(&field.data_type)
+                    ));
+                } else {
+                    code.push_str(&format!(
+                        "    pub {}: {},\n",
+                        replace_keyword(&field.name.as_ref().unwrap()),
+                        get_field_type(&field.data_type)
+                    ));
+                }
             }
             StructElement::Chunked(chunked) => {
                 write_struct_fields(code, struct_name, &chunked.elements);
@@ -612,7 +872,10 @@ static PRIMITIVE_TYPES: [&str; 9] = [
 ];
 
 fn get_imports(elements: &[StructElement], protocols: &[(Protocol, PathBuf)]) -> Vec<String> {
-    let mut imports = Vec::new();
+    let mut imports = vec![
+        "use crate::data::{EoReader, EoReaderError, EoWriter, EoSerialize, EoSerializeError};"
+            .to_owned(),
+    ];
 
     let mut unique_types = HashSet::new();
     find_unique_types(elements, &mut unique_types);

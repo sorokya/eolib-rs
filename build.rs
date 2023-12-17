@@ -2,6 +2,7 @@ use convert_case::Casing;
 use glob::glob;
 use serde::Deserialize;
 use std::{
+    collections::HashSet,
     fs::File,
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -221,7 +222,15 @@ fn main() {
                 Element::Enum(protocol_enum) => {
                     generate_enum_file(protocol_enum, &output_dir, &mut mod_code).unwrap()
                 }
-                _ => {} // TODO
+                Element::Struct(protocol_struct) => {
+                    let imports = get_imports(&protocol_struct.elements, &protocols);
+                    generate_struct_file(protocol_struct, imports, &output_dir, &mut mod_code)
+                        .unwrap();
+                }
+                Element::Packet(packet) => {
+                    let imports = get_imports(&packet.elements, &protocols);
+                    generate_packet_file(packet, imports, &output_dir, &mut mod_code).unwrap();
+                }
             }
         }
 
@@ -318,6 +327,16 @@ fn generate_enum_file(
     code.push_str(&format!("    }}\n"));
     code.push_str(&format!("}}\n\n"));
 
+    code.push_str(&format!("impl Default for {} {{\n", protocol_enum.name));
+
+    code.push_str(&format!("    fn default() -> Self {{\n"));
+    code.push_str(&format!(
+        "        Self::{}\n",
+        replace_keyword(&variants[0].name)
+    ));
+    code.push_str(&format!("    }}\n"));
+    code.push_str(&format!("}}\n"));
+
     code.push_str(CODEGEN_WARNING);
 
     let snake_name = protocol_enum.name.to_case(convert_case::Case::Snake);
@@ -332,6 +351,347 @@ fn generate_enum_file(
     Ok(())
 }
 
+fn generate_struct_file(
+    protocol_struct: &Struct,
+    imports: Vec<String>,
+    path: &PathBuf,
+    mod_code: &mut String,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut code = String::new();
+    code.push_str(CODEGEN_WARNING);
+
+    for import in &imports {
+        code.push_str(&format!("{}\n", import));
+    }
+
+    if imports.len() > 0 {
+        code.push_str("\n");
+    }
+
+    write_struct(&protocol_struct.name, &protocol_struct.elements, &mut code);
+
+    for switch in protocol_struct.elements.iter().filter_map(|e| match e {
+        StructElement::Switch(switch) => Some(switch),
+        _ => None,
+    }) {
+        let name = get_field_type(&format!("{}_{}_data", protocol_struct.name, switch.field));
+        generate_switch_code(&name, &mut code, switch);
+    }
+
+    code.push_str(CODEGEN_WARNING);
+
+    let snake_name = protocol_struct.name.to_case(convert_case::Case::Snake);
+    let mut file = File::create(path.join(format!("{}.rs", snake_name)))?;
+
+    file.write_all(code.as_bytes())?;
+
+    mod_code.push_str(&format!("mod {};\n", snake_name));
+    mod_code.push_str(&format!("pub use {}::*;\n", snake_name));
+
+    Ok(())
+}
+
+fn generate_packet_file(
+    packet: &Packet,
+    imports: Vec<String>,
+    path: &PathBuf,
+    mod_code: &mut String,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut code = String::new();
+    code.push_str(CODEGEN_WARNING);
+
+    for import in &imports {
+        code.push_str(&format!("{}\n", import));
+    }
+
+    if imports.len() > 0 {
+        code.push_str("\n");
+    }
+
+    // either Server or Client
+    let source = match path.to_str().unwrap() {
+        "src/protocol/net/server" => "Server",
+        "src/protocol/net/client" => "Client",
+        _ => panic!("Unknown protocol path: {}", path.to_string_lossy()),
+    };
+
+    let name = format!("{}{}{}Packet", packet.family, packet.action, source);
+
+    write_struct(&name, &packet.elements, &mut code);
+
+    for switch in packet.elements.iter().filter_map(|e| match e {
+        StructElement::Switch(switch) => Some(switch),
+        _ => None,
+    }) {
+        let name = get_field_type(&format!("{}_{}_data", name, switch.field));
+        generate_switch_code(&name, &mut code, switch);
+    }
+
+    // Assumes no nested chunked elements
+    for chunked in packet.elements.iter().filter_map(|e| match e {
+        StructElement::Chunked(chunked) => Some(chunked),
+        _ => None,
+    }) {
+        for switch in chunked.elements.iter().filter_map(|e| match e {
+            StructElement::Switch(switch) => Some(switch),
+            _ => None,
+        }) {
+            let name = get_field_type(&format!("{}_{}_data", name, switch.field));
+            generate_switch_code(&name, &mut code, switch);
+        }
+    }
+
+    code.push_str(CODEGEN_WARNING);
+
+    let snake_name = name.to_case(convert_case::Case::Snake);
+    let mut file = File::create(path.join(format!("{}.rs", snake_name)))?;
+
+    file.write_all(code.as_bytes())?;
+
+    mod_code.push_str(&format!("mod {};\n", snake_name));
+    mod_code.push_str(&format!("pub use {}::*;\n", snake_name));
+
+    Ok(())
+}
+
+fn generate_switch_code(name: &str, code: &mut String, switch: &Switch) {
+    code.push_str(&format!("#[derive(Debug, PartialEq, Eq)]\n"));
+    code.push_str(&format!("pub enum {} {{\n", name));
+    for case in switch.cases.iter().filter(|c| c.elements.is_some()) {
+        match case.default {
+            Some(true) => {
+                code.push_str(&format!(
+                    "    Default({}),\n",
+                    get_field_type(&format!("{}_default", name)),
+                ));
+            }
+            _ => {
+                code.push_str(&format!(
+                    "    {}({}),\n",
+                    replace_keyword(&case.value.as_ref().unwrap()),
+                    get_field_type(&format!("{}_{}", name, case.value.as_ref().unwrap()))
+                ));
+            }
+        }
+    }
+    code.push_str("}\n\n");
+
+    for case in switch.cases.iter().filter(|c| c.elements.is_some()) {
+        let elements = case.elements.as_ref().unwrap();
+        let name = match case.default {
+            Some(true) => get_field_type(&format!("{}_default", name)),
+            _ => get_field_type(&format!("{}_{}", name, case.value.as_ref().unwrap())),
+        };
+
+        write_struct(&name, elements, code);
+
+        for switch in elements.iter().filter_map(|e| match e {
+            StructElement::Switch(switch) => Some(switch),
+            _ => None,
+        }) {
+            let name = get_field_type(&format!("{}_{}_data", name, switch.field));
+            generate_switch_code(&name, code, switch);
+        }
+    }
+}
+
+fn write_struct(name: &str, elements: &[StructElement], code: &mut String) {
+    let comments = match elements
+        .iter()
+        .find(|e| matches!(e, StructElement::Comment(_)))
+    {
+        Some(StructElement::Comment(comment)) => get_comments(comment),
+        _ => vec![],
+    };
+
+    for comment in &comments {
+        code.push_str(&format!("/// {}\n", comment));
+    }
+
+    let mut derives = vec!["Debug", "Default", "PartialEq", "Eq"];
+    if name == "Coords" {
+        derives.push("Clone");
+        derives.push("Copy");
+    }
+
+    code.push_str(&format!("#[derive({})]\n", derives.join(", ")));
+    code.push_str(&format!("pub struct {} {{\n", name));
+    write_struct_fields(code, name, elements);
+    code.push_str("}\n\n");
+
+    code.push_str(&format!("impl {} {{\n", name));
+    code.push_str("    pub fn new() -> Self {\n");
+    code.push_str("        Self::default()\n");
+    code.push_str("    }\n");
+    code.push_str("}\n\n");
+}
+
+fn write_struct_fields(code: &mut String, struct_name: &str, elements: &[StructElement]) {
+    for element in elements {
+        match element {
+            StructElement::Field(field) => {
+                if field.name.is_none() {
+                    continue;
+                }
+
+                let comments = match &field.comment {
+                    Some(comment) => get_comments(comment),
+                    None => vec![],
+                };
+
+                for comment in &comments {
+                    code.push_str(&format!("    /// {}\n", comment));
+                }
+
+                code.push_str(&format!(
+                    "    pub {}: {},\n",
+                    replace_keyword(&field.name.as_ref().unwrap()),
+                    get_field_type(&field.data_type)
+                ));
+            }
+            StructElement::Chunked(chunked) => {
+                write_struct_fields(code, struct_name, &chunked.elements);
+            }
+            StructElement::Array(array) => {
+                let comments = match &array.comment {
+                    Some(comment) => get_comments(comment),
+                    None => vec![],
+                };
+
+                for comment in &comments {
+                    code.push_str(&format!("    /// {}\n", comment));
+                }
+
+                code.push_str(&format!(
+                    "    pub {}: Vec<{}>,\n",
+                    replace_keyword(&array.name),
+                    get_field_type(&array.data_type)
+                ));
+            }
+            StructElement::Switch(switch) => {
+                code.push_str(&format!(
+                    "    pub {}_data: Option<{}>,\n",
+                    replace_keyword(&switch.field),
+                    get_field_type(&format!("{}_{}_data", struct_name, switch.field))
+                ));
+            }
+            _ => {}
+        }
+    }
+}
+
+fn get_field_type(data_type: &str) -> String {
+    if data_type.contains(":") {
+        return get_field_type(data_type.split(":").next().unwrap());
+    }
+
+    match data_type {
+        "byte" => "i32".to_owned(),
+        "char" => "i32".to_owned(),
+        "short" => "i32".to_owned(),
+        "three" => "i32".to_owned(),
+        "int" => "i32".to_owned(),
+        "bool" => "bool".to_owned(),
+        "string" => "String".to_owned(),
+        "encoded_string" => "String".to_owned(),
+        "blob" => "Vec<u8>".to_owned(),
+        _ => data_type.to_owned().to_case(convert_case::Case::Pascal),
+    }
+}
+
+static PRIMITIVE_TYPES: [&str; 9] = [
+    "byte",
+    "char",
+    "short",
+    "three",
+    "int",
+    "bool",
+    "string",
+    "encoded_string",
+    "blob",
+];
+
+fn get_imports(elements: &[StructElement], protocols: &[(Protocol, PathBuf)]) -> Vec<String> {
+    let mut imports = Vec::new();
+
+    let mut unique_types = HashSet::new();
+    find_unique_types(elements, &mut unique_types);
+
+    for primitive in &PRIMITIVE_TYPES {
+        unique_types.remove(*primitive);
+    }
+
+    for unique_type in &unique_types {
+        if let Some(protocol_path) = find_protocol_for_type(unique_type, protocols) {
+            let use_path = match protocol_path.to_str().unwrap() {
+                "eo-protocol/xml/protocol.xml" => "crate::protocol",
+                "eo-protocol/xml/map/protocol.xml" => "crate::protocol::map",
+                "eo-protocol/xml/pub/protocol.xml" => "crate::protocol::r#pub",
+                "eo-protocol/xml/net/protocol.xml" => "crate::protocol::net",
+                "eo-protocol/xml/net/client/protocol.xml" => "crate::protocol::net::client",
+                "eo-protocol/xml/net/server/protocol.xml" => "crate::protocol::net::server",
+                _ => panic!("Unknown protocol path: {}", protocol_path.to_string_lossy()),
+            };
+
+            imports.push(format!("use {}::{};", use_path, unique_type));
+        }
+    }
+
+    imports
+}
+
+fn find_protocol_for_type<'a>(
+    data_type: &str,
+    protocols: &'a [(Protocol, PathBuf)],
+) -> Option<&'a PathBuf> {
+    for (protocol, path) in protocols {
+        for element in &protocol.elements {
+            match element {
+                Element::Struct(protocol_struct) => {
+                    if protocol_struct.name == data_type {
+                        return Some(&path);
+                    }
+                }
+                Element::Enum(protocol_enum) => {
+                    if protocol_enum.name == data_type {
+                        return Some(&path);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    None
+}
+
+fn find_unique_types(elements: &[StructElement], unique_types: &mut HashSet<String>) {
+    for element in elements {
+        match element {
+            StructElement::Field(field) => {
+                if field.data_type.contains(":") {
+                    unique_types.insert(field.data_type.split(":").next().unwrap().to_owned());
+                } else {
+                    unique_types.insert(field.data_type.clone());
+                }
+            }
+            StructElement::Chunked(chunked) => {
+                find_unique_types(&chunked.elements, unique_types);
+            }
+            StructElement::Array(array) => {
+                unique_types.insert(array.data_type.clone());
+            }
+            StructElement::Switch(switch) => {
+                for case in &switch.cases {
+                    if let Some(elements) = &case.elements {
+                        find_unique_types(elements, unique_types);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
 fn get_comments(comment: &str) -> Vec<&str> {
     comment.split('\n').map(|c| c.trim()).collect::<Vec<&str>>()
 }
@@ -354,6 +714,10 @@ fn get_output_directory(base: &Path) -> PathBuf {
 fn replace_keyword(word: &str) -> String {
     if word == "Self" {
         return "SELF".to_owned();
+    }
+
+    if word == "0" {
+        return "Zero".to_owned();
     }
 
     if RUST_KEYWORDS.contains(&word) {

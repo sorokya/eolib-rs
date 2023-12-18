@@ -311,7 +311,7 @@ fn generate_enum_file(
     };
 
     append_doc_comments(&mut code, comments);
-    code.push_str(&format!("#[derive(Debug, PartialEq, Eq)]\n"));
+    code.push_str(&format!("#[derive(Debug, PartialEq, Eq, Copy, Clone)]\n"));
     code.push_str(&format!("pub enum {} {{\n", protocol_enum.name));
 
     let variants: Vec<&EnumValue> = protocol_enum
@@ -605,7 +605,7 @@ fn write_struct(
         name
     ));
     code.push_str(
-        "    fn serialize(&self, writer: &mut EoWriter) -> Result<(), EoSerializeError> {\n",
+        "    fn serialize(&self, _writer: &mut EoWriter) -> Result<(), EoSerializeError> {\n",
     );
     code.push_str("        Ok(())\n");
     code.push_str("    }\n");
@@ -643,7 +643,42 @@ fn write_struct(
                         StructElement::Array(array) => {
                             generate_deserialize_array(code, array, enums, structs)
                         }
-                        StructElement::Switch(_) => {}
+                        StructElement::Switch(switch) => {
+                            let field = match elements.iter().find(|e| match e {
+                                StructElement::Field(field) => {
+                                    field.name == Some(switch.field.clone())
+                                }
+                                StructElement::Chunked(chunked) => {
+                                    chunked.elements.iter().any(|e| match e {
+                                        StructElement::Field(field) => {
+                                            field.name == Some(switch.field.clone())
+                                        }
+                                        _ => false,
+                                    })
+                                }
+                                _ => false,
+                            }) {
+                                Some(StructElement::Field(field)) => field,
+                                Some(StructElement::Chunked(chunked)) => {
+                                    match chunked.elements.iter().find(|e| match e {
+                                        StructElement::Field(field) => {
+                                            field.name == Some(switch.field.clone())
+                                        }
+                                        _ => false,
+                                    }) {
+                                        Some(StructElement::Field(field)) => field,
+                                        _ => panic!("Switch field not found! {}", name),
+                                    }
+                                }
+                                _ => panic!("Switch field not found! {}", name),
+                            };
+
+                            let switch_enum = enums
+                                .iter()
+                                .find(|e| e.name == field.data_type)
+                                .expect("Switch enum not found!");
+                            generate_deserialize_switch(code, name, switch, switch_enum);
+                        }
                         _ => {}
                     }
                 }
@@ -656,7 +691,34 @@ fn write_struct(
             }
             StructElement::Field(field) => generate_deserialize_field(code, field, enums, structs),
             StructElement::Array(array) => generate_deserialize_array(code, array, enums, structs),
-            StructElement::Switch(_) => {}
+            StructElement::Switch(switch) => {
+                let field = match elements.iter().find(|e| match e {
+                    StructElement::Field(field) => field.name == Some(switch.field.clone()),
+                    StructElement::Chunked(chunked) => chunked.elements.iter().any(|e| match e {
+                        StructElement::Field(field) => field.name == Some(switch.field.clone()),
+                        _ => false,
+                    }),
+                    _ => false,
+                }) {
+                    Some(StructElement::Field(field)) => field,
+                    Some(StructElement::Chunked(chunked)) => {
+                        match chunked.elements.iter().find(|e| match e {
+                            StructElement::Field(field) => field.name == Some(switch.field.clone()),
+                            _ => false,
+                        }) {
+                            Some(StructElement::Field(field)) => field,
+                            _ => panic!("Switch field not found! {}", name),
+                        }
+                    }
+                    _ => panic!("Switch field not found! {}", name),
+                };
+
+                let switch_enum = enums
+                    .iter()
+                    .find(|e| e.name == field.data_type)
+                    .expect("Switch enum not found!");
+                generate_deserialize_switch(code, name, switch, switch_enum);
+            }
             _ => {}
         }
     }
@@ -741,6 +803,71 @@ fn generate_deserialize_array(
     } else {
         generate_inner_array_deserialize(code, array, enums, structs);
     }
+}
+
+fn generate_deserialize_switch(
+    code: &mut String,
+    struct_name: &str,
+    switch: &Switch,
+    switch_enum: &Enum,
+) {
+    code.push_str(&format!(
+        "        data.{}_data = match data.{} as i32 {{\n",
+        replace_keyword(&switch.field),
+        replace_keyword(&switch.field)
+    ));
+    for case in switch.cases.iter().filter(|c| c.elements.is_some()) {
+        match case.value {
+            Some(ref value) => {
+                if let Some(EnumElement::Value(enum_value)) =
+                    switch_enum.elements.iter().find(|e| match e {
+                        EnumElement::Value(v) => v.name == *value,
+                        _ => false,
+                    })
+                {
+                    code.push_str(&format!(
+                        "            {} => Some({}::{}({}::deserialize(reader)?)),\n",
+                        enum_value.value,
+                        get_field_type(&format!("{}_{}_data", struct_name, switch.field)),
+                        replace_keyword(&value),
+                        get_field_type(&format!(
+                            "{}_{}_data_{}",
+                            struct_name, switch.field, &value
+                        ))
+                    ));
+                } else {
+                    code.push_str(&format!(
+                        "            {} => Some({}::{}({}::deserialize(reader)?)),\n",
+                        value,
+                        get_field_type(&format!("{}_{}_data", struct_name, switch.field)),
+                        replace_keyword(&value),
+                        get_field_type(&format!(
+                            "{}_{}_data_{}",
+                            struct_name, switch.field, &value
+                        ))
+                    ));
+                }
+            }
+            None => match case.default {
+                Some(true) => {
+                    code.push_str(&format!(
+                        "            _ => Some({}::Default({}::deserialize(reader)?)),\n",
+                        get_field_type(&format!("{}_{}_data", struct_name, switch.field)),
+                        get_field_type(&format!("{}_{}_data_default", struct_name, switch.field))
+                    ));
+                }
+                _ => panic!("Unnamed switch case with default=false"),
+            },
+        }
+    }
+
+    if !switch.cases.iter().any(|c| match c.default {
+        Some(true) => true,
+        _ => false,
+    }) {
+        code.push_str(&format!("            _ => None,\n",));
+    }
+    code.push_str("        };\n");
 }
 
 fn generate_inner_field_deserialize(
@@ -1056,6 +1183,10 @@ fn get_output_directory(base: &Path) -> PathBuf {
 fn replace_keyword(word: &str) -> String {
     if word == "Self" {
         return "SELF".to_owned();
+    }
+
+    if word == "Ok" {
+        return "OK".to_owned();
     }
 
     if word == "0" {

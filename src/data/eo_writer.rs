@@ -14,6 +14,14 @@ pub enum EoWriterError {
     InvalidThreeValue(i32),
     #[error("Invalid int value {0} must be between 0 and {}", INT_MAX)]
     InvalidIntValue(i32),
+    #[error("{0}")]
+    Other(String),
+}
+
+impl From<String> for EoWriterError {
+    fn from(s: String) -> Self {
+        Self::Other(s)
+    }
 }
 
 #[derive(Debug)]
@@ -59,6 +67,11 @@ impl EoWriter {
     /// adds a byte to the data stream
     pub fn add_byte(&mut self, byte: u8) {
         self.data.put_u8(byte);
+    }
+
+    /// adds a byte slice to the data stream
+    pub fn add_bytes(&mut self, bytes: &[u8]) {
+        self.data.put_slice(bytes);
     }
 
     /// adds a char to the data stream

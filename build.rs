@@ -335,13 +335,16 @@ fn generate_enum_file(
     code.push_str("}\n\n");
 
     code.push_str(&format!(
-        "impl TryFrom<i32> for {} {{\n",
+        "impl TryFrom<{}> for {} {{\n",
+        get_field_type(&protocol_enum.data_type),
         protocol_enum.name
     ));
     code.push_str(&format!("    type Error = String;\n"));
     code.push_str(&format!(
-        "    fn try_from(value: i32) -> Result<Self, <{} as TryFrom<i32>>::Error> {{\n",
-        protocol_enum.name
+        "    fn try_from(value: {}) -> Result<Self, <{} as TryFrom<{}>>::Error> {{\n",
+        get_field_type(&protocol_enum.data_type),
+        protocol_enum.name,
+        get_field_type(&protocol_enum.data_type)
     ));
     code.push_str(&format!("        match value {{\n"));
 
@@ -361,7 +364,11 @@ fn generate_enum_file(
     code.push_str(&format!("    }}\n"));
     code.push_str(&format!("}}\n\n"));
 
-    code.push_str(&format!("impl From<{}> for i32 {{\n", protocol_enum.name));
+    code.push_str(&format!(
+        "impl From<{}> for {} {{\n",
+        protocol_enum.name,
+        get_field_type(&protocol_enum.data_type)
+    ));
     code.push_str(&format!(
         "    fn from(value: {}) -> Self {{\n",
         protocol_enum.name
@@ -605,8 +612,108 @@ fn write_struct(
         name
     ));
     code.push_str(
-        "    fn serialize(&self, _writer: &mut EoWriter) -> Result<(), EoSerializeError> {\n",
+        "    fn serialize(&self, writer: &mut EoWriter) -> Result<(), EoSerializeError> {\n",
     );
+    for element in elements {
+        match element {
+            StructElement::Break => {
+                generate_serialize_break(code);
+            }
+            StructElement::Dummy(dummy) => {
+                generate_serialize_dummy(code, dummy);
+            }
+            StructElement::Field(field) => {
+                generate_serialize_field(code, field, enums, structs);
+            }
+            StructElement::Array(array) => generate_serialize_array(code, array, enums, structs),
+            StructElement::Length(length) => generate_serialize_length(code, length),
+            StructElement::Switch(switch) => {
+                let field = match elements.iter().find(|e| match e {
+                    StructElement::Field(field) => field.name == Some(switch.field.clone()),
+                    StructElement::Chunked(chunked) => chunked.elements.iter().any(|e| match e {
+                        StructElement::Field(field) => field.name == Some(switch.field.clone()),
+                        _ => false,
+                    }),
+                    _ => false,
+                }) {
+                    Some(StructElement::Field(field)) => field,
+                    Some(StructElement::Chunked(chunked)) => {
+                        match chunked.elements.iter().find(|e| match e {
+                            StructElement::Field(field) => field.name == Some(switch.field.clone()),
+                            _ => false,
+                        }) {
+                            Some(StructElement::Field(field)) => field,
+                            _ => panic!("Switch field not found! {}", name),
+                        }
+                    }
+                    _ => panic!("Switch field not found! {}", name),
+                };
+
+                let switch_enum = enums
+                    .iter()
+                    .find(|e| e.name == field.data_type)
+                    .expect("Switch enum not found!");
+                generate_serialize_switch(code, name, switch, switch_enum);
+            }
+            StructElement::Chunked(chunked) => {
+                for element in &chunked.elements {
+                    match element {
+                        StructElement::Break => {
+                            generate_serialize_break(code);
+                        }
+                        StructElement::Dummy(dummy) => {
+                            generate_serialize_dummy(code, dummy);
+                        }
+                        StructElement::Field(field) => {
+                            generate_serialize_field(code, field, enums, structs);
+                        }
+                        StructElement::Array(array) => {
+                            generate_serialize_array(code, array, enums, structs)
+                        }
+                        StructElement::Length(length) => generate_serialize_length(code, length),
+                        StructElement::Switch(switch) => {
+                            let field = match elements.iter().find(|e| match e {
+                                StructElement::Field(field) => {
+                                    field.name == Some(switch.field.clone())
+                                }
+                                StructElement::Chunked(chunked) => {
+                                    chunked.elements.iter().any(|e| match e {
+                                        StructElement::Field(field) => {
+                                            field.name == Some(switch.field.clone())
+                                        }
+                                        _ => false,
+                                    })
+                                }
+                                _ => false,
+                            }) {
+                                Some(StructElement::Field(field)) => field,
+                                Some(StructElement::Chunked(chunked)) => {
+                                    match chunked.elements.iter().find(|e| match e {
+                                        StructElement::Field(field) => {
+                                            field.name == Some(switch.field.clone())
+                                        }
+                                        _ => false,
+                                    }) {
+                                        Some(StructElement::Field(field)) => field,
+                                        _ => panic!("Switch field not found! {}", name),
+                                    }
+                                }
+                                _ => panic!("Switch field not found! {}", name),
+                            };
+
+                            let switch_enum = enums
+                                .iter()
+                                .find(|e| e.name == field.data_type)
+                                .expect("Switch enum not found!");
+                            generate_serialize_switch(code, name, switch, switch_enum);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
     code.push_str("        Ok(())\n");
     code.push_str("    }\n");
     code.push_str(&format!(
@@ -726,6 +833,200 @@ fn write_struct(
     code.push_str("        Ok(data)\n");
     code.push_str("    }\n");
     code.push_str("}\n\n");
+}
+
+fn needs_result(data_type: &str) -> bool {
+    match data_type {
+        "byte" | "string" | "encoded_string" => false,
+        _ => true,
+    }
+}
+
+fn generate_serialize_break(code: &mut String) {
+    code.push_str("        writer.add_byte(0xff);\n");
+}
+
+fn generate_serialize_dummy(code: &mut String, dummy: &Dummy) {
+    code.push_str(&format!(
+        "        writer.add_{}({}){};\n",
+        dummy.data_type,
+        if dummy.value.chars().all(|c| c.is_numeric()) {
+            dummy.value.to_owned()
+        } else {
+            format!("\"{}\"", dummy.value)
+        },
+        if needs_result(&dummy.data_type) {
+            "?"
+        } else {
+            ""
+        }
+    ));
+}
+
+fn generate_serialize_field(code: &mut String, field: &Field, enums: &[Enum], structs: &[Struct]) {
+    let optional = match field.optional {
+        Some(true) => true,
+        _ => false,
+    };
+
+    if optional {
+        let name = match field.name {
+            Some(ref name) => name,
+            None => panic!("Field name is required for optional fields!"),
+        };
+
+        code.push_str(&format!(
+            "        if let Some({}) = self.{} {{\n",
+            replace_keyword(&name),
+            replace_keyword(&name)
+        ));
+        generate_inner_field_serialize(code, field, enums, structs);
+        code.push_str("        }\n");
+    } else {
+        generate_inner_field_serialize(code, field, enums, structs);
+    }
+}
+
+fn generate_inner_field_serialize(
+    code: &mut String,
+    field: &Field,
+    enums: &[Enum],
+    structs: &[Struct],
+) {
+    let (data_type, enum_data_type) = if field.data_type.contains(":") {
+        field.data_type.split_once(":").unwrap()
+    } else {
+        (field.data_type.as_str(), "")
+    };
+
+    let optional = match field.optional {
+        Some(true) => true,
+        _ => false,
+    };
+
+    if let Some(ref protocol_enum) = enums.iter().find(|e| e.name == data_type) {
+        // for the Foobar:short shit
+        let enum_data_type = if enum_data_type.is_empty() {
+            protocol_enum.data_type.to_string()
+        } else {
+            enum_data_type.to_string()
+        };
+
+        let name = if let Some(value) = &field.value {
+            format!("{}::{}", get_field_type(&data_type), value)
+        } else {
+            let name = field.name.as_ref().unwrap();
+            if optional {
+                replace_keyword(&name)
+            } else {
+                format!("self.{}", replace_keyword(&name))
+            }
+        };
+
+        code.push_str(&format!(
+            "writer.add_{}({}.into()){};\n",
+            enum_data_type,
+            name,
+            if needs_result(&enum_data_type) {
+                "?"
+            } else {
+                ""
+            }
+        ));
+    } else if let Some(_) = structs.iter().find(|s| s.name == data_type) {
+        let name = if let Some(value) = &field.value {
+            value.to_owned()
+        } else {
+            let name = field.name.as_ref().unwrap();
+            if optional {
+                replace_keyword(&name)
+            } else {
+                format!("self.{}", name)
+            }
+        };
+        code.push_str(&format!("{}.serialize(writer)?;\n", name))
+    } else {
+        match data_type {
+            "blob" => code.push_str(&format!(
+                "writer.add_bytes(&self.{});\n",
+                field.name.as_ref().unwrap()
+            )),
+            "bool" => {
+                let name = if let Some(value) = &field.value {
+                    value.to_owned()
+                } else {
+                    let name = field.name.as_ref().unwrap();
+                    if optional {
+                        replace_keyword(&name)
+                    } else {
+                        format!("self.{}", name)
+                    }
+                };
+                code.push_str(&format!(
+                    "writer.add_{}(if {} {{ 1 }} else {{ 0 }}){};\n",
+                    if enum_data_type.is_empty() {
+                        "char"
+                    } else {
+                        enum_data_type
+                    },
+                    name,
+                    if needs_result(if enum_data_type.is_empty() {
+                        "char"
+                    } else {
+                        enum_data_type
+                    }) {
+                        "?"
+                    } else {
+                        ""
+                    }
+                ))
+            }
+            _ => {
+                let name = if let Some(value) = &field.value {
+                    if value.chars().all(|c| c.is_numeric()) {
+                        value.to_owned()
+                    } else {
+                        format!("\"{}\"", value)
+                    }
+                } else {
+                    let name = field.name.as_ref().unwrap();
+                    if optional {
+                        replace_keyword(&name)
+                    } else {
+                        format!("self.{}", name)
+                    }
+                };
+
+                code.push_str(&format!(
+                    "writer.add_{}({}{}){};\n",
+                    replace_keyword(&field.data_type),
+                    if matches!(field.data_type.as_str(), "string" | "encoded_string") {
+                        "&"
+                    } else {
+                        ""
+                    },
+                    name,
+                    if needs_result(&field.data_type) {
+                        "?"
+                    } else {
+                        ""
+                    }
+                ));
+            }
+        }
+    }
+}
+
+fn generate_serialize_array(code: &mut String, array: &Array, enums: &[Enum], structs: &[Struct]) {}
+
+fn generate_serialize_length(code: &mut String, length: &Length) {}
+
+fn generate_serialize_switch(
+    code: &mut String,
+    struct_name: &str,
+    switch: &Switch,
+    switch_enum: &Enum,
+) {
 }
 
 fn generate_deserialize_length(code: &mut String, length: &Length) {
@@ -890,14 +1191,9 @@ fn generate_inner_field_deserialize(
             enum_data_type.to_string()
         };
         code.push_str(&format!(
-            "{}::try_from(reader.get_{}()?{})?",
+            "{}::try_from(reader.get_{}()?)?",
             get_field_type(&data_type),
             enum_data_type,
-            if enum_data_type == "byte" {
-                " as i32"
-            } else {
-                ""
-            }
         ));
     } else if let Some(_) = structs.iter().find(|s| s.name == data_type) {
         code.push_str(&format!("{}::deserialize(reader)?", field.data_type));
@@ -914,9 +1210,6 @@ fn generate_inner_field_deserialize(
             )),
             _ => {
                 code.push_str(&format!("reader.get_{}()?", data_type));
-                if data_type == "byte" {
-                    code.push_str(" as i32");
-                }
             }
         }
     }
@@ -1052,7 +1345,7 @@ fn get_field_type(data_type: &str) -> String {
     }
 
     match data_type {
-        "byte" => "i32".to_owned(),
+        "byte" => "u8".to_owned(),
         "char" => "i32".to_owned(),
         "short" => "i32".to_owned(),
         "three" => "i32".to_owned(),

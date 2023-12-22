@@ -9,6 +9,12 @@ pub enum EoSerializeError {
     WriteError(EoWriterError),
 }
 
+impl From<EoWriterError> for EoSerializeError {
+    fn from(e: EoWriterError) -> Self {
+        Self::WriteError(e)
+    }
+}
+
 pub trait EoSerialize: Sized {
     fn deserialize(reader: &EoReader) -> Result<Self, EoReaderError>;
     fn serialize(&self, writer: &mut EoWriter) -> Result<(), EoSerializeError>;

@@ -201,11 +201,6 @@ fn main() {
         }
     }
 
-    // clear the protocol directory
-    if Path::new("src/protocol").exists() {
-        std::fs::remove_dir_all("src/protocol").unwrap();
-    }
-
     let enums: Vec<Enum> = protocols
         .iter()
         .map(|(protocol, _)| {
@@ -469,11 +464,13 @@ fn generate_packet_file(
         code.push_str("\n");
     }
 
+    let path_name = path.to_str().unwrap();
+
     // either Server or Client
-    let source = match path.to_str().unwrap() {
-        "src/protocol/net/server" => "Server",
-        "src/protocol/net/client" => "Client",
-        _ => panic!("Unknown protocol path: {}", path.to_string_lossy()),
+    let source = if path_name.ends_with("server") {
+        "Server"
+    } else {
+        "Client"
     };
 
     let name = format!("{}{}{}Packet", packet.family, packet.action, source);
@@ -1668,7 +1665,8 @@ fn append_doc_comments(code: &mut String, comments: Vec<&str>) {
 }
 
 fn get_output_directory(base: &Path) -> PathBuf {
-    Path::new("src/protocol").join(
+    let out_dir = std::env::var_os("OUT_DIR").unwrap();
+    Path::new(&out_dir).join(
         base.parent()
             .unwrap()
             .strip_prefix("eo-protocol/xml")

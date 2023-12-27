@@ -8,6 +8,9 @@ rust-version = "1.61.0"
 license = "MIT"
 repository = "https://github.com/sorokya/eolib-rs"
 readme = "README.md"
+exclude = [
+    ".github",
+]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

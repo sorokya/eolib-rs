@@ -1,8 +1,13 @@
 [package]
 name = "eolib"
-version = "0.1.0"
+version = "1.0.0-RC1"
+authors = ["Richard Leek <richard@richardleek.com>"]
+description = "A core rust library for writing applications related to Endless Online"
 edition = "2021"
 rust-version = "1.61.0"
+license = "MIT"
+repository = "https://github.com/sorokya/eolib-rs"
+readme = "README.md"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

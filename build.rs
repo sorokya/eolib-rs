@@ -8,12 +8,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-macro_rules! p {
-    ($($tokens: tt)*) => {
-        println!("cargo:warning={}", format!($($tokens)*))
-    }
-}
-
 #[derive(Debug, Deserialize)]
 struct Protocol {
     #[serde(rename = "$value", default)]
@@ -275,7 +269,6 @@ fn main() {
 
         let is_root = path.parent().unwrap() == Path::new("eo-protocol/xml");
         if is_root {
-            // TODO: don't hard code this
             mod_code.push_str("pub mod map;\n");
             mod_code.push_str("pub mod net;\n");
             mod_code.push_str("pub mod r#pub;\n");
@@ -283,7 +276,6 @@ fn main() {
 
         let is_net = path.parent().unwrap() == Path::new("eo-protocol/xml/net");
         if is_net {
-            // TODO: don't hard code this
             mod_code.push_str("pub mod client;\n");
             mod_code.push_str("pub mod server;\n");
         }
@@ -597,7 +589,7 @@ fn write_struct(
 
     code.push_str(&format!("#[derive({})]\n", derives.join(", ")));
     code.push_str(&format!("pub struct {} {{\n", name));
-    write_struct_fields(code, name, elements);
+    let field_count = write_struct_fields(code, name, elements, 0);
     code.push_str("}\n\n");
 
     code.push_str(&format!("impl {} {{\n", name));
@@ -611,9 +603,40 @@ fn write_struct(
         "    /// Serializes a [{}] into the given [EoWriter] instance\n",
         name
     ));
-    code.push_str(
-        "    fn serialize(&self, writer: &mut EoWriter) -> Result<(), EoSerializeError> {\n",
-    );
+    if field_count > 0 {
+        code.push_str(
+            "    fn serialize(&self, writer: &mut EoWriter) -> Result<(), EoSerializeError> {\n",
+        );
+        write_struct_serialize(code, name, elements, enums, structs);
+    } else {
+        code.push_str(
+            "    fn serialize(&self, _writer: &mut EoWriter) -> Result<(), EoSerializeError> {\n",
+        );
+        code.push_str("        Ok(())\n");
+    }
+    code.push_str("    }\n");
+    code.push_str(&format!(
+        "    /// Deserializes a [{}] from an [EoReader] instance\n",
+        name
+    ));
+    if field_count > 0 {
+        code.push_str("    fn deserialize(reader: &EoReader) -> Result<Self, EoReaderError> {\n");
+        write_struct_deserialize(code, name, elements, enums, structs);
+    } else {
+        code.push_str("    fn deserialize(_reader: &EoReader) -> Result<Self, EoReaderError> {\n");
+        code.push_str("        Ok(Self::default())\n");
+    }
+    code.push_str("    }\n");
+    code.push_str("}\n\n");
+}
+
+fn write_struct_serialize(
+    code: &mut String,
+    name: &str,
+    elements: &[StructElement],
+    enums: &[Enum],
+    structs: &[Struct],
+) {
     for element in elements {
         match element {
             StructElement::Break => {
@@ -626,34 +649,13 @@ fn write_struct(
                 generate_serialize_field(code, field, enums, structs);
             }
             StructElement::Array(array) => generate_serialize_array(code, array, enums, structs),
-            StructElement::Length(length) => generate_serialize_length(code, length),
+            StructElement::Length(length) => generate_serialize_length(
+                code,
+                get_name_of_field_that_uses_this_length(&length.name, elements),
+                length,
+            ),
             StructElement::Switch(switch) => {
-                let field = match elements.iter().find(|e| match e {
-                    StructElement::Field(field) => field.name == Some(switch.field.clone()),
-                    StructElement::Chunked(chunked) => chunked.elements.iter().any(|e| match e {
-                        StructElement::Field(field) => field.name == Some(switch.field.clone()),
-                        _ => false,
-                    }),
-                    _ => false,
-                }) {
-                    Some(StructElement::Field(field)) => field,
-                    Some(StructElement::Chunked(chunked)) => {
-                        match chunked.elements.iter().find(|e| match e {
-                            StructElement::Field(field) => field.name == Some(switch.field.clone()),
-                            _ => false,
-                        }) {
-                            Some(StructElement::Field(field)) => field,
-                            _ => panic!("Switch field not found! {}", name),
-                        }
-                    }
-                    _ => panic!("Switch field not found! {}", name),
-                };
-
-                let switch_enum = enums
-                    .iter()
-                    .find(|e| e.name == field.data_type)
-                    .expect("Switch enum not found!");
-                generate_serialize_switch(code, name, switch, switch_enum);
+                generate_serialize_switch(code, name, switch);
             }
             StructElement::Chunked(chunked) => {
                 for element in &chunked.elements {
@@ -670,42 +672,13 @@ fn write_struct(
                         StructElement::Array(array) => {
                             generate_serialize_array(code, array, enums, structs)
                         }
-                        StructElement::Length(length) => generate_serialize_length(code, length),
+                        StructElement::Length(length) => generate_serialize_length(
+                            code,
+                            get_name_of_field_that_uses_this_length(&length.name, elements),
+                            length,
+                        ),
                         StructElement::Switch(switch) => {
-                            let field = match elements.iter().find(|e| match e {
-                                StructElement::Field(field) => {
-                                    field.name == Some(switch.field.clone())
-                                }
-                                StructElement::Chunked(chunked) => {
-                                    chunked.elements.iter().any(|e| match e {
-                                        StructElement::Field(field) => {
-                                            field.name == Some(switch.field.clone())
-                                        }
-                                        _ => false,
-                                    })
-                                }
-                                _ => false,
-                            }) {
-                                Some(StructElement::Field(field)) => field,
-                                Some(StructElement::Chunked(chunked)) => {
-                                    match chunked.elements.iter().find(|e| match e {
-                                        StructElement::Field(field) => {
-                                            field.name == Some(switch.field.clone())
-                                        }
-                                        _ => false,
-                                    }) {
-                                        Some(StructElement::Field(field)) => field,
-                                        _ => panic!("Switch field not found! {}", name),
-                                    }
-                                }
-                                _ => panic!("Switch field not found! {}", name),
-                            };
-
-                            let switch_enum = enums
-                                .iter()
-                                .find(|e| e.name == field.data_type)
-                                .expect("Switch enum not found!");
-                            generate_serialize_switch(code, name, switch, switch_enum);
+                            generate_serialize_switch(code, name, switch);
                         }
                         _ => {}
                     }
@@ -715,12 +688,60 @@ fn write_struct(
         }
     }
     code.push_str("        Ok(())\n");
-    code.push_str("    }\n");
-    code.push_str(&format!(
-        "    /// Deserializes a [{}] from an [EoReader] instance\n",
-        name
-    ));
-    code.push_str("    fn deserialize(reader: &EoReader) -> Result<Self, EoReaderError> {\n");
+}
+
+fn get_name_of_field_that_uses_this_length(
+    length_name: &str,
+    elements: &[StructElement],
+) -> String {
+    let field = elements.iter().find_map(|e| match e {
+        StructElement::Array(array) => {
+            if array.length == Some(length_name.to_owned()) {
+                Some(array.name.clone())
+            } else {
+                None
+            }
+        }
+        StructElement::Field(field) => {
+            if field.length == Some(length_name.to_owned()) {
+                Some(field.name.as_ref().unwrap().clone())
+            } else {
+                None
+            }
+        }
+        StructElement::Chunked(chunked) => chunked.elements.iter().find_map(|e| match e {
+            StructElement::Array(array) => {
+                if array.length == Some(length_name.to_owned()) {
+                    Some(array.name.clone())
+                } else {
+                    None
+                }
+            }
+            StructElement::Field(field) => {
+                if field.length == Some(length_name.to_owned()) {
+                    Some(field.name.as_ref().unwrap().clone())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }),
+        _ => None,
+    });
+
+    match field {
+        Some(field) => field,
+        None => panic!("Length field not found! {}", length_name),
+    }
+}
+
+fn write_struct_deserialize(
+    code: &mut String,
+    name: &str,
+    elements: &[StructElement],
+    enums: &[Enum],
+    structs: &[Struct],
+) {
     code.push_str(
         "        let current_chunked_readming_mode = reader.get_chunked_reading_mode();\n",
     );
@@ -831,8 +852,6 @@ fn write_struct(
     }
     code.push_str("        reader.set_chunked_reading_mode(current_chunked_readming_mode);\n");
     code.push_str("        Ok(data)\n");
-    code.push_str("    }\n");
-    code.push_str("}\n\n");
 }
 
 fn needs_result(data_type: &str) -> bool {
@@ -924,7 +943,7 @@ fn generate_inner_field_serialize(
         };
 
         code.push_str(&format!(
-            "writer.add_{}({}.into()){};\n",
+            "        writer.add_{}({}.into()){};\n",
             enum_data_type,
             name,
             if needs_result(&enum_data_type) {
@@ -948,7 +967,7 @@ fn generate_inner_field_serialize(
     } else {
         match data_type {
             "blob" => code.push_str(&format!(
-                "writer.add_bytes(&self.{});\n",
+                "        writer.add_bytes(&self.{});\n",
                 field.name.as_ref().unwrap()
             )),
             "bool" => {
@@ -963,7 +982,7 @@ fn generate_inner_field_serialize(
                     }
                 };
                 code.push_str(&format!(
-                    "writer.add_{}(if {} {{ 1 }} else {{ 0 }}){};\n",
+                    "        writer.add_{}(if {} {{ 1 }} else {{ 0 }}){};\n",
                     if enum_data_type.is_empty() {
                         "char"
                     } else {
@@ -997,10 +1016,35 @@ fn generate_inner_field_serialize(
                     }
                 };
 
+                let length = match &field.length {
+                    Some(length) => length.as_str(),
+                    None => ""
+                };
+
+                let padded = match field.padded {
+                    Some(padded) => padded,
+                    _ => false,
+                };
+
+                if padded && length != "" && matches!(field.data_type.as_str(), "string" | "encoded_string") {
+                    // Fill remaning bytes with 0xff
+                    code.push_str(&format!("      let padding_length = {} - {}.len();\n", length, name));
+                    code.push_str("        let padding = \"ÿ\".repeat(padding_length);\n");
+                    code.push_str(&format!("        writer.add_{}(&format!(\"{{}}{{}}\", {}, padding));\n", replace_keyword(&field.data_type), name));
+                    return;
+                }
+
                 code.push_str(&format!(
-                    "writer.add_{}({}{}){};\n",
+                    "        writer.add_{}({}{}){};\n",
                     replace_keyword(&field.data_type),
-                    if matches!(field.data_type.as_str(), "string" | "encoded_string") {
+                    if name == "array_item"
+                        && matches!(
+                            field.data_type.as_str(),
+                            "byte" | "char" | "short" | "three" | "int"
+                        )
+                    {
+                        "*"
+                    } else if matches!(field.data_type.as_str(), "string" | "encoded_string") {
                         "&"
                     } else {
                         ""
@@ -1017,16 +1061,139 @@ fn generate_inner_field_serialize(
     }
 }
 
-fn generate_serialize_array(code: &mut String, array: &Array, enums: &[Enum], structs: &[Struct]) {}
+fn generate_serialize_array(code: &mut String, array: &Array, enums: &[Enum], structs: &[Struct]) {
+    let optional = match array.optional {
+        Some(true) => true,
+        _ => false,
+    };
 
-fn generate_serialize_length(code: &mut String, length: &Length) {}
+    if optional {
+        panic!("Optional array not yet supported because I'm lazy");
+    }
+
+    let delimited = match array.delimited {
+        Some(true) => true,
+        _ => false,
+    };
+
+    if delimited && !array.trailing_delimiter {
+        code.push_str(&format!(
+            "        for (i, array_item) in self.{}.iter().enumerate() {{\n",
+            replace_keyword(&array.name)
+        ));
+        code.push_str("            if i > 0 {\n");
+        code.push_str("                writer.add_byte(0xff);\n");
+        code.push_str("            }\n");
+    } else {
+        code.push_str(&format!(
+            "        for array_item in &self.{} {{\n            ",
+            replace_keyword(&array.name)
+        ));
+    }
+
+    generate_inner_field_serialize(
+        code,
+        &Field {
+            name: Some("array_item".to_owned()),
+            data_type: array.data_type.clone(),
+            value: None,
+            comment: None,
+            padded: None,
+            optional: Some(true), // always use the raw identifier rather than self.identifier
+            length: None,
+        },
+        enums,
+        structs,
+    );
+
+    if delimited && array.trailing_delimiter {
+        code.push_str("            writer.add_byte(0xff);\n");
+    }
+
+    code.push_str("        }\n");
+}
+
+fn generate_serialize_length(code: &mut String, field_name: String, length: &Length) {
+    let optional = match length.optional {
+        Some(true) => true,
+        _ => false,
+    };
+
+    let offset = match length.offset {
+        Some(offset) => offset,
+        None => 0,
+    };
+
+    if optional {
+        code.push_str(&format!(
+            "        if let Some(length) = &self.{} {{\n",
+            length.name
+        ));
+    }
+
+    code.push_str(&format!(
+        "        writer.add_{}(({}{}) as i32){};\n",
+        length.data_type,
+        format!("self.{}.len()", field_name),
+        if offset < 0 {
+            format!(" + {}", offset.abs())
+        } else if offset > 0 {
+            format!(" - {}", offset.abs())
+        } else {
+            "".to_owned()
+        },
+        if needs_result(&length.data_type) {
+            "?"
+        } else {
+            ""
+        }
+    ));
+
+    if optional {
+        code.push_str("        }\n");
+    }
+}
 
 fn generate_serialize_switch(
     code: &mut String,
     struct_name: &str,
     switch: &Switch,
-    switch_enum: &Enum,
 ) {
+    code.push_str(&format!(
+        "        match &self.{}_data {{\n",
+        replace_keyword(&switch.field)
+    ));
+    for case in switch.cases.iter().filter(|c| c.elements.is_some()) {
+        match case.value {
+            Some(ref value) => {
+                    code.push_str(&format!(
+                        "            Some({}::{}(data)) => {{\n",
+                        get_field_type(&format!("{}_{}_data", struct_name, switch.field)),
+                        replace_keyword(&value)
+                    ));
+                    code.push_str(&format!(
+                        "                data.serialize(writer)?;\n",
+                    ));
+                    code.push_str("            }\n");
+            }
+            None => match case.default {
+                Some(true) => {
+                    code.push_str(&format!(
+                        "            Some({}::Default(data)) => {{\n",
+                        get_field_type(&format!("{}_{}_data", struct_name, switch.field)),
+                    ));
+                    code.push_str(&format!(
+                        "                data.serialize(writer)?;\n",
+                    ));
+                    code.push_str("            }\n");
+                }
+                _ => panic!("Unnamed switch case with default=false"),
+            },
+        }
+    }
+
+    code.push_str(&format!("            _ => (),\n",));
+    code.push_str("        }\n");
 }
 
 fn generate_deserialize_length(code: &mut String, length: &Length) {
@@ -1035,14 +1202,26 @@ fn generate_deserialize_length(code: &mut String, length: &Length) {
         _ => false,
     };
 
+    let offset = match length.offset {
+        Some(offset) => offset,
+        None => 0,
+    };
+
     if optional {
         code.push_str("if reader.remaining()? > 0 {{\n");
     }
 
     code.push_str(&format!(
-        "        let {} = reader.get_{}()?;\n",
+        "        let {} = (reader.get_{}()?{}) as usize;\n",
         replace_keyword(&length.name),
-        length.data_type
+        length.data_type,
+        if offset > 0 {
+            format!(" + {}", offset.abs())
+        } else if offset < 0 {
+            format!(" - {}", offset.abs())
+        } else {
+            "".to_owned()
+        },
     ));
 
     if optional {
@@ -1198,18 +1377,28 @@ fn generate_inner_field_deserialize(
     } else if let Some(_) = structs.iter().find(|s| s.name == data_type) {
         code.push_str(&format!("{}::deserialize(reader)?", field.data_type));
     } else {
-        match data_type {
-            "blob" => code.push_str("reader.get_bytes(reader.remaining()?)?"),
-            "bool" => code.push_str(&format!(
-                "reader.get_{}()? == 1",
-                if enum_data_type.is_empty() {
-                    "char"
-                } else {
-                    enum_data_type
+        if let Some(length) = &field.length {
+            match data_type {
+                "string" => code.push_str(&format!("        reader.get_fixed_string({})?", length)),
+                "encoded_string" => {
+                    code.push_str(&format!("        reader.get_fixed_encoded_string({})?", length))
                 }
-            )),
-            _ => {
-                code.push_str(&format!("reader.get_{}()?", data_type));
+                _ => panic!("Unexpected length for data type: {}", data_type),
+            }
+        } else {
+            match data_type {
+                "blob" => code.push_str("        reader.get_bytes(reader.remaining()?)?"),
+                "bool" => code.push_str(&format!(
+                    "reader.get_{}()? == 1",
+                    if enum_data_type.is_empty() {
+                        "char"
+                    } else {
+                        enum_data_type
+                    }
+                )),
+                _ => {
+                    code.push_str(&format!("        reader.get_{}()?", data_type));
+                }
             }
         }
     }
@@ -1242,12 +1431,12 @@ fn generate_inner_array_deserialize(
     generate_inner_field_deserialize(
         code,
         &Field {
-            name: None,
+            name: Some(array.name.clone()),
             data_type: array.data_type.clone(),
             value: None,
             comment: None,
             padded: None,
-            optional: None,
+            optional: array.optional,
             length: None,
         },
         enums,
@@ -1272,13 +1461,21 @@ fn generate_inner_array_deserialize(
     code.push_str("        }\n");
 }
 
-fn write_struct_fields(code: &mut String, struct_name: &str, elements: &[StructElement]) {
+fn write_struct_fields(
+    code: &mut String,
+    struct_name: &str,
+    elements: &[StructElement],
+    field_count: usize,
+) -> usize {
+    let mut field_count = field_count;
     for element in elements {
         match element {
             StructElement::Field(field) => {
                 if field.name.is_none() {
                     continue;
                 }
+
+                field_count += 1;
 
                 let optional = match field.optional {
                     Some(true) => true,
@@ -1309,7 +1506,8 @@ fn write_struct_fields(code: &mut String, struct_name: &str, elements: &[StructE
                 }
             }
             StructElement::Chunked(chunked) => {
-                write_struct_fields(code, struct_name, &chunked.elements);
+                field_count +=
+                    write_struct_fields(code, struct_name, &chunked.elements, field_count);
             }
             StructElement::Array(array) => {
                 let comments = match &array.comment {
@@ -1321,6 +1519,8 @@ fn write_struct_fields(code: &mut String, struct_name: &str, elements: &[StructE
                     code.push_str(&format!("    /// {}\n", comment));
                 }
 
+                field_count += 1;
+
                 code.push_str(&format!(
                     "    pub {}: Vec<{}>,\n",
                     replace_keyword(&array.name),
@@ -1328,6 +1528,7 @@ fn write_struct_fields(code: &mut String, struct_name: &str, elements: &[StructE
                 ));
             }
             StructElement::Switch(switch) => {
+                field_count += 1;
                 code.push_str(&format!(
                     "    pub {}_data: Option<{}>,\n",
                     replace_keyword(&switch.field),
@@ -1337,6 +1538,8 @@ fn write_struct_fields(code: &mut String, struct_name: &str, elements: &[StructE
             _ => {}
         }
     }
+
+    field_count
 }
 
 fn get_field_type(data_type: &str) -> String {

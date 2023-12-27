@@ -11,8 +11,8 @@
 [docs-url]: https://docs.rs/eolib
 [mit-badge]: https://img.shields.io/badge/license-MIT-blue.svg
 [mit-url]: https://github.com/sorokya/eolib-rs/blob/master/LICENSE
-[actions-badge]: https://github.com/sorokya/eolib/workflows/Rust/badge.svg
-[actions-url]: https://github.com/sorokya/eolib/actions?query=workflow%3ARust+branch%3Amaster
+[actions-badge]: https://github.com/sorokya/eolib-rs/actions/workflows/rust.yml/badge.svg
+[actions-url]: https://github.com/sorokya/eolib-rs/actions/workflows/rust.yml
 
 A core rust library for writing applications related to Endless Online
 

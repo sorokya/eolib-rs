@@ -1004,7 +1004,7 @@ fn generate_inner_field_serialize(
 
                 let length = match &field.length {
                     Some(length) => length.as_str(),
-                    None => ""
+                    None => "",
                 };
 
                 let padded = match field.padded {
@@ -1012,10 +1012,20 @@ fn generate_inner_field_serialize(
                     _ => false,
                 };
 
-                if padded && !length.is_empty() && matches!(field.data_type.as_str(), "string" | "encoded_string") {
-                    code.push_str(&format!("      let padding_length = {} - {}.len();\n", length, name));
+                if padded
+                    && !length.is_empty()
+                    && matches!(field.data_type.as_str(), "string" | "encoded_string")
+                {
+                    code.push_str(&format!(
+                        "      let padding_length = {} - {}.len();\n",
+                        length, name
+                    ));
                     code.push_str("        let padding = \"ÿ\".repeat(padding_length);\n");
-                    code.push_str(&format!("        writer.add_{}(&format!(\"{{}}{{}}\", {}, padding));\n", replace_keyword(&field.data_type), name));
+                    code.push_str(&format!(
+                        "        writer.add_{}(&format!(\"{{}}{{}}\", {}, padding));\n",
+                        replace_keyword(&field.data_type),
+                        name
+                    ));
                     return;
                 }
 
@@ -1029,7 +1039,10 @@ fn generate_inner_field_serialize(
                         )
                     {
                         "*"
-                    } else if matches!(field.data_type.as_str(), "string" | "encoded_string") && !name.starts_with('"') && name != "array_item" {
+                    } else if matches!(field.data_type.as_str(), "string" | "encoded_string")
+                        && !name.starts_with('"')
+                        && name != "array_item"
+                    {
                         "&"
                     } else {
                         ""
@@ -1125,11 +1138,7 @@ fn generate_serialize_length(code: &mut String, field_name: String, length: &Len
     }
 }
 
-fn generate_serialize_switch(
-    code: &mut String,
-    struct_name: &str,
-    switch: &Switch,
-) {
+fn generate_serialize_switch(code: &mut String, struct_name: &str, switch: &Switch) {
     code.push_str(&format!(
         "        match &self.{}_data {{\n",
         replace_keyword(&switch.field)
@@ -1137,15 +1146,13 @@ fn generate_serialize_switch(
     for case in switch.cases.iter().filter(|c| c.elements.is_some()) {
         match case.value {
             Some(ref value) => {
-                    code.push_str(&format!(
-                        "            Some({}::{}(data)) => {{\n",
-                        get_field_type(&format!("{}_{}_data", struct_name, switch.field)),
-                        replace_keyword(value)
-                    ));
-                    code.push_str(
-                        "                data.serialize(writer)?;\n",
-                    );
-                    code.push_str("            }\n");
+                code.push_str(&format!(
+                    "            Some({}::{}(data)) => {{\n",
+                    get_field_type(&format!("{}_{}_data", struct_name, switch.field)),
+                    replace_keyword(value)
+                ));
+                code.push_str("                data.serialize(writer)?;\n");
+                code.push_str("            }\n");
             }
             None => match case.default {
                 Some(true) => {
@@ -1153,9 +1160,7 @@ fn generate_serialize_switch(
                         "            Some({}::Default(data)) => {{\n",
                         get_field_type(&format!("{}_{}_data", struct_name, switch.field)),
                     ));
-                    code.push_str(
-                        "                data.serialize(writer)?;\n",
-                    );
+                    code.push_str("                data.serialize(writer)?;\n");
                     code.push_str("            }\n");
                 }
                 _ => panic!("Unnamed switch case with default=false"),
@@ -1163,7 +1168,7 @@ fn generate_serialize_switch(
         }
     }
 
-    code.push_str("            _ => (),\n",);
+    code.push_str("            _ => (),\n");
     code.push_str("        }\n");
 }
 
@@ -1332,9 +1337,10 @@ fn generate_inner_field_deserialize(
     } else if let Some(length) = &field.length {
         match data_type {
             "string" => code.push_str(&format!("        reader.get_fixed_string({})?", length)),
-            "encoded_string" => {
-                code.push_str(&format!("        reader.get_fixed_encoded_string({})?", length))
-            }
+            "encoded_string" => code.push_str(&format!(
+                "        reader.get_fixed_encoded_string({})?",
+                length
+            )),
             _ => panic!("Unexpected length for data type: {}", data_type),
         }
     } else {

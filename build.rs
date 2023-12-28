@@ -600,17 +600,11 @@ fn write_struct(
         "    /// Serializes a [{}] into the given [EoWriter] instance\n",
         name
     ));
-    if field_count > 0 {
-        code.push_str(
-            "    fn serialize(&self, writer: &mut EoWriter) -> Result<(), EoSerializeError> {\n",
-        );
-        write_struct_serialize(code, name, elements, enums, structs);
-    } else {
-        code.push_str(
-            "    fn serialize(&self, _writer: &mut EoWriter) -> Result<(), EoSerializeError> {\n",
-        );
-        code.push_str("        Ok(())\n");
-    }
+    code.push_str(
+        "    fn serialize(&self, writer: &mut EoWriter) -> Result<(), EoSerializeError> {\n",
+    );
+    write_struct_serialize(code, name, elements, enums, structs);
+
     code.push_str("    }\n");
     code.push_str(&format!(
         "    /// Deserializes a [{}] from an [EoReader] instance\n",
@@ -740,7 +734,7 @@ fn write_struct_deserialize(
     structs: &[Struct],
 ) {
     code.push_str(
-        "        let current_chunked_readming_mode = reader.get_chunked_reading_mode();\n",
+        "        let current_chunked_reading_mode = reader.get_chunked_reading_mode();\n",
     );
     code.push_str("        let mut data = Self::default();\n");
 
@@ -847,7 +841,7 @@ fn write_struct_deserialize(
             _ => {}
         }
     }
-    code.push_str("        reader.set_chunked_reading_mode(current_chunked_readming_mode);\n");
+    code.push_str("        reader.set_chunked_reading_mode(current_chunked_reading_mode);\n");
     code.push_str("        Ok(data)\n");
 }
 

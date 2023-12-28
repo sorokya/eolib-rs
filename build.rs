@@ -317,34 +317,31 @@ fn generate_enum_file(
         append_doc_comments(&mut code, comments);
         code.push_str(&format!("    {},\n", replace_keyword(&variant.name)));
     }
+    code.push_str(&format!("    Unrecognized({}),\n", get_field_type(&protocol_enum.data_type)));
     code.push_str("}\n\n");
 
     code.push_str(&format!(
-        "impl TryFrom<{}> for {} {{\n",
+        "impl From<{}> for {} {{\n",
         get_field_type(&protocol_enum.data_type),
         protocol_enum.name
     ));
-    code.push_str("    type Error = String;\n");
     code.push_str(&format!(
-        "    fn try_from(value: {}) -> Result<Self, <{} as TryFrom<{}>>::Error> {{\n",
+        "    fn from(value: {}) -> Self {{\n",
         get_field_type(&protocol_enum.data_type),
-        protocol_enum.name,
-        get_field_type(&protocol_enum.data_type)
     ));
     code.push_str("        match value {\n");
 
     for variant in &variants {
         code.push_str(&format!(
-            "            {} => Ok(Self::{}),\n",
+            "            {} => Self::{},\n",
             variant.value,
             replace_keyword(&variant.name)
         ));
     }
 
-    code.push_str(&format!(
-        "            _ => Err(format!(\"Invalid value for {}: {{}}\", value)),\n",
-        protocol_enum.name
-    ));
+    code.push_str(
+        "            _ => Self::Unrecognized(value),\n"
+    );
     code.push_str("        }\n");
     code.push_str("    }\n");
     code.push_str("}\n\n");
@@ -355,8 +352,9 @@ fn generate_enum_file(
         get_field_type(&protocol_enum.data_type)
     ));
     code.push_str(&format!(
-        "    fn from(value: {}) -> Self {{\n",
-        protocol_enum.name
+        "    fn from(value: {}) -> {} {{\n",
+        protocol_enum.name,
+        get_field_type(&protocol_enum.data_type),
     ));
     code.push_str("        match value {\n");
     for variant in &variants {
@@ -367,6 +365,10 @@ fn generate_enum_file(
             variant.value
         ));
     }
+    code.push_str(&format!(
+        "            {}::Unrecognized(value) => value,\n",
+        protocol_enum.name
+    ));
     code.push_str("        }\n");
     code.push_str("    }\n");
     code.push_str("}\n\n");
@@ -1253,8 +1255,9 @@ fn generate_deserialize_switch(
     switch_enum: &Enum,
 ) {
     code.push_str(&format!(
-        "        data.{}_data = match data.{} as i32 {{\n",
+        "        data.{}_data = match {}::from(data.{}) {{\n",
         replace_keyword(&switch.field),
+        get_field_type(&switch_enum.data_type),
         replace_keyword(&switch.field)
     ));
     for case in switch.cases.iter().filter(|c| c.elements.is_some()) {
@@ -1328,7 +1331,7 @@ fn generate_inner_field_deserialize(
             enum_data_type.to_string()
         };
         code.push_str(&format!(
-            "{}::try_from(reader.get_{}()?)?",
+            "{}::from(reader.get_{}()?)",
             get_field_type(data_type),
             enum_data_type,
         ));

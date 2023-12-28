@@ -24,7 +24,7 @@ impl From<String> for EoWriterError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 /// A writer for writing data to an EO data stream
 ///
 /// Uses [BytesMut] under the hood for efficient memory usage.
@@ -52,9 +52,7 @@ pub struct EoWriter {
 impl EoWriter {
     /// creates a new [EoWriter]
     pub fn new() -> Self {
-        Self {
-            data: BytesMut::new(),
-        }
+        Self::default()
     }
 
     /// creates a new [EoWriter] with the specified capacity
@@ -76,7 +74,7 @@ impl EoWriter {
 
     /// adds a char to the data stream
     pub fn add_char(&mut self, char: i32) -> Result<(), EoWriterError> {
-        if char < 0 || char > CHAR_MAX {
+        if !(0..=CHAR_MAX).contains(&char) {
             return Err(EoWriterError::InvalidCharValue(char));
         }
 
@@ -87,7 +85,7 @@ impl EoWriter {
 
     /// adds a short to the data stream
     pub fn add_short(&mut self, short: i32) -> Result<(), EoWriterError> {
-        if short < 0 || short > SHORT_MAX {
+        if !(0..=SHORT_MAX).contains(&short) {
             return Err(EoWriterError::InvalidShortValue(short));
         }
 
@@ -98,7 +96,7 @@ impl EoWriter {
 
     /// adds a three to the data stream
     pub fn add_three(&mut self, three: i32) -> Result<(), EoWriterError> {
-        if three < 0 || three > THREE_MAX {
+        if !(0..=THREE_MAX).contains(&three) {
             return Err(EoWriterError::InvalidThreeValue(three));
         }
 
@@ -129,7 +127,7 @@ impl EoWriter {
         let (mut string, _, _) = WINDOWS_1252.encode(string);
         let string = string.to_mut();
         encode_string(&mut *string);
-        self.data.put_slice(&string);
+        self.data.put_slice(string);
     }
 
     /// freezes the data and returns a [Bytes] object that can be freely cloned

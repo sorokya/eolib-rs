@@ -203,24 +203,22 @@ fn main() {
 
     let enums: Vec<Enum> = protocols
         .iter()
-        .map(|(protocol, _)| {
+        .flat_map(|(protocol, _)| {
             protocol.elements.iter().filter_map(|e| match e {
                 Element::Enum(protocol_enum) => Some(protocol_enum.clone()),
                 _ => None,
             })
         })
-        .flatten()
         .collect();
 
     let structs: Vec<Struct> = protocols
         .iter()
-        .map(|(protocol, _)| {
+        .flat_map(|(protocol, _)| {
             protocol.elements.iter().filter_map(|e| match e {
                 Element::Struct(protocol_struct) => Some(protocol_struct.clone()),
                 _ => None,
             })
         })
-        .flatten()
         .collect();
 
     for (protocol, path) in &protocols {
@@ -282,7 +280,7 @@ fn main() {
 
 fn generate_enum_file(
     protocol_enum: &Enum,
-    path: &PathBuf,
+    path: &Path,
     mod_code: &mut String,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut code = String::new();
@@ -298,7 +296,7 @@ fn generate_enum_file(
     };
 
     append_doc_comments(&mut code, comments);
-    code.push_str(&format!("#[derive(Debug, PartialEq, Eq, Copy, Clone)]\n"));
+    code.push_str("#[derive(Debug, PartialEq, Eq, Copy, Clone)]\n");
     code.push_str(&format!("pub enum {} {{\n", protocol_enum.name));
 
     let variants: Vec<&EnumValue> = protocol_enum
@@ -326,14 +324,14 @@ fn generate_enum_file(
         get_field_type(&protocol_enum.data_type),
         protocol_enum.name
     ));
-    code.push_str(&format!("    type Error = String;\n"));
+    code.push_str("    type Error = String;\n");
     code.push_str(&format!(
         "    fn try_from(value: {}) -> Result<Self, <{} as TryFrom<{}>>::Error> {{\n",
         get_field_type(&protocol_enum.data_type),
         protocol_enum.name,
         get_field_type(&protocol_enum.data_type)
     ));
-    code.push_str(&format!("        match value {{\n"));
+    code.push_str("        match value {\n");
 
     for variant in &variants {
         code.push_str(&format!(
@@ -347,9 +345,9 @@ fn generate_enum_file(
         "            _ => Err(format!(\"Invalid value for {}: {{}}\", value)),\n",
         protocol_enum.name
     ));
-    code.push_str(&format!("        }}\n"));
-    code.push_str(&format!("    }}\n"));
-    code.push_str(&format!("}}\n\n"));
+    code.push_str("        }\n");
+    code.push_str("    }\n");
+    code.push_str("}\n\n");
 
     code.push_str(&format!(
         "impl From<{}> for {} {{\n",
@@ -360,7 +358,7 @@ fn generate_enum_file(
         "    fn from(value: {}) -> Self {{\n",
         protocol_enum.name
     ));
-    code.push_str(&format!("        match value {{\n"));
+    code.push_str("        match value {\n");
     for variant in &variants {
         code.push_str(&format!(
             "            {}::{} => {},\n",
@@ -369,19 +367,19 @@ fn generate_enum_file(
             variant.value
         ));
     }
-    code.push_str(&format!("        }}\n"));
-    code.push_str(&format!("    }}\n"));
-    code.push_str(&format!("}}\n\n"));
+    code.push_str("        }\n");
+    code.push_str("    }\n");
+    code.push_str("}\n\n");
 
     code.push_str(&format!("impl Default for {} {{\n", protocol_enum.name));
 
-    code.push_str(&format!("    fn default() -> Self {{\n"));
+    code.push_str("    fn default() -> Self {\n");
     code.push_str(&format!(
         "        Self::{}\n",
         replace_keyword(&variants[0].name)
     ));
-    code.push_str(&format!("    }}\n"));
-    code.push_str(&format!("}}\n"));
+    code.push_str("    }\n");
+    code.push_str("}\n");
 
     code.push_str(CODEGEN_WARNING);
 
@@ -400,7 +398,7 @@ fn generate_enum_file(
 fn generate_struct_file(
     protocol_struct: &Struct,
     imports: Vec<String>,
-    path: &PathBuf,
+    path: &Path,
     mod_code: &mut String,
     enums: &[Enum],
     structs: &[Struct],
@@ -412,8 +410,8 @@ fn generate_struct_file(
         code.push_str(&format!("{}\n", import));
     }
 
-    if imports.len() > 0 {
-        code.push_str("\n");
+    if !imports.is_empty() {
+        code.push('\n');
     }
 
     write_struct(
@@ -448,7 +446,7 @@ fn generate_struct_file(
 fn generate_packet_file(
     packet: &Packet,
     imports: Vec<String>,
-    path: &PathBuf,
+    path: &Path,
     mod_code: &mut String,
     enums: &[Enum],
     structs: &[Struct],
@@ -460,8 +458,8 @@ fn generate_packet_file(
         code.push_str(&format!("{}\n", import));
     }
 
-    if imports.len() > 0 {
-        code.push_str("\n");
+    if !imports.is_empty() {
+        code.push('\n');
     }
 
     let path_name = path.to_str().unwrap();
@@ -519,7 +517,7 @@ fn generate_switch_code(
     enums: &[Enum],
     structs: &[Struct],
 ) {
-    code.push_str(&format!("#[derive(Debug, PartialEq, Eq)]\n"));
+    code.push_str("#[derive(Debug, PartialEq, Eq)]\n");
     code.push_str(&format!("pub enum {} {{\n", name));
     for case in switch.cases.iter().filter(|c| c.elements.is_some()) {
         match case.default {
@@ -532,7 +530,7 @@ fn generate_switch_code(
             _ => {
                 code.push_str(&format!(
                     "    {}({}),\n",
-                    replace_keyword(&case.value.as_ref().unwrap()),
+                    replace_keyword(case.value.as_ref().unwrap()),
                     get_field_type(&format!("{}_{}", name, case.value.as_ref().unwrap()))
                 ));
             }
@@ -852,10 +850,7 @@ fn write_struct_deserialize(
 }
 
 fn needs_result(data_type: &str) -> bool {
-    match data_type {
-        "byte" | "string" | "encoded_string" => false,
-        _ => true,
-    }
+    !matches!(data_type, "byte" | "string" | "encoded_string")
 }
 
 fn generate_serialize_break(code: &mut String) {
@@ -880,10 +875,7 @@ fn generate_serialize_dummy(code: &mut String, dummy: &Dummy) {
 }
 
 fn generate_serialize_field(code: &mut String, field: &Field, enums: &[Enum], structs: &[Struct]) {
-    let optional = match field.optional {
-        Some(true) => true,
-        _ => false,
-    };
+    let optional = matches!(field.optional, Some(true));
 
     if optional {
         let name = match field.name {
@@ -893,8 +885,8 @@ fn generate_serialize_field(code: &mut String, field: &Field, enums: &[Enum], st
 
         code.push_str(&format!(
             "        if let Some({}) = self.{} {{\n",
-            replace_keyword(&name),
-            replace_keyword(&name)
+            replace_keyword(name),
+            replace_keyword(name)
         ));
         generate_inner_field_serialize(code, field, enums, structs);
         code.push_str("        }\n");
@@ -909,18 +901,15 @@ fn generate_inner_field_serialize(
     enums: &[Enum],
     structs: &[Struct],
 ) {
-    let (data_type, enum_data_type) = if field.data_type.contains(":") {
-        field.data_type.split_once(":").unwrap()
+    let (data_type, enum_data_type) = if field.data_type.contains(':') {
+        field.data_type.split_once(':').unwrap()
     } else {
         (field.data_type.as_str(), "")
     };
 
-    let optional = match field.optional {
-        Some(true) => true,
-        _ => false,
-    };
+    let optional = matches!(field.optional, Some(true));
 
-    if let Some(ref protocol_enum) = enums.iter().find(|e| e.name == data_type) {
+    if let Some(protocol_enum) = enums.iter().find(|e| e.name == data_type) {
         // for the Foobar:short shit
         let enum_data_type = if enum_data_type.is_empty() {
             protocol_enum.data_type.to_string()
@@ -929,13 +918,13 @@ fn generate_inner_field_serialize(
         };
 
         let name = if let Some(value) = &field.value {
-            format!("{}::{}", get_field_type(&data_type), value)
+            format!("{}::{}", get_field_type(data_type), value)
         } else {
             let name = field.name.as_ref().unwrap();
             if optional {
-                replace_keyword(&name)
+                replace_keyword(name)
             } else {
-                format!("self.{}", replace_keyword(&name))
+                format!("self.{}", replace_keyword(name))
             }
         };
 
@@ -949,13 +938,13 @@ fn generate_inner_field_serialize(
                 ""
             }
         ));
-    } else if let Some(_) = structs.iter().find(|s| s.name == data_type) {
+    } else if structs.iter().any(|s| s.name == data_type) {
         let name = if let Some(value) = &field.value {
             value.to_owned()
         } else {
             let name = field.name.as_ref().unwrap();
             if optional {
-                replace_keyword(&name)
+                replace_keyword(name)
             } else {
                 format!("self.{}", name)
             }
@@ -973,7 +962,7 @@ fn generate_inner_field_serialize(
                 } else {
                     let name = field.name.as_ref().unwrap();
                     if optional {
-                        replace_keyword(&name)
+                        replace_keyword(name)
                     } else {
                         format!("self.{}", name)
                     }
@@ -1007,7 +996,7 @@ fn generate_inner_field_serialize(
                 } else {
                     let name = field.name.as_ref().unwrap();
                     if optional {
-                        replace_keyword(&name)
+                        replace_keyword(name)
                     } else {
                         format!("self.{}", name)
                     }
@@ -1023,8 +1012,7 @@ fn generate_inner_field_serialize(
                     _ => false,
                 };
 
-                if padded && length != "" && matches!(field.data_type.as_str(), "string" | "encoded_string") {
-                    // Fill remaning bytes with 0xff
+                if padded && !length.is_empty() && matches!(field.data_type.as_str(), "string" | "encoded_string") {
                     code.push_str(&format!("      let padding_length = {} - {}.len();\n", length, name));
                     code.push_str("        let padding = \"ÿ\".repeat(padding_length);\n");
                     code.push_str(&format!("        writer.add_{}(&format!(\"{{}}{{}}\", {}, padding));\n", replace_keyword(&field.data_type), name));
@@ -1041,7 +1029,7 @@ fn generate_inner_field_serialize(
                         )
                     {
                         "*"
-                    } else if matches!(field.data_type.as_str(), "string" | "encoded_string") {
+                    } else if matches!(field.data_type.as_str(), "string" | "encoded_string") && !name.starts_with('"') && name != "array_item" {
                         "&"
                     } else {
                         ""
@@ -1059,19 +1047,12 @@ fn generate_inner_field_serialize(
 }
 
 fn generate_serialize_array(code: &mut String, array: &Array, enums: &[Enum], structs: &[Struct]) {
-    let optional = match array.optional {
-        Some(true) => true,
-        _ => false,
-    };
-
+    let optional = matches!(array.optional, Some(true));
     if optional {
         panic!("Optional array not yet supported because I'm lazy");
     }
 
-    let delimited = match array.delimited {
-        Some(true) => true,
-        _ => false,
-    };
+    let delimited = matches!(array.delimited, Some(true));
 
     if delimited && !array.trailing_delimiter {
         code.push_str(&format!(
@@ -1111,15 +1092,8 @@ fn generate_serialize_array(code: &mut String, array: &Array, enums: &[Enum], st
 }
 
 fn generate_serialize_length(code: &mut String, field_name: String, length: &Length) {
-    let optional = match length.optional {
-        Some(true) => true,
-        _ => false,
-    };
-
-    let offset = match length.offset {
-        Some(offset) => offset,
-        None => 0,
-    };
+    let optional = matches!(length.optional, Some(true));
+    let offset = length.offset.unwrap_or(0);
 
     if optional {
         code.push_str(&format!(
@@ -1128,17 +1102,17 @@ fn generate_serialize_length(code: &mut String, field_name: String, length: &Len
         ));
     }
 
+    let offset_operation = match offset.cmp(&0) {
+        std::cmp::Ordering::Less => format!(" + {}", offset.abs()),
+        std::cmp::Ordering::Greater => format!(" - {}", offset.abs()),
+        std::cmp::Ordering::Equal => "".to_owned(),
+    };
+
     code.push_str(&format!(
-        "        writer.add_{}(({}{}) as i32){};\n",
+        "        writer.add_{}((self.{}.len(){}) as i32){};\n",
         length.data_type,
-        format!("self.{}.len()", field_name),
-        if offset < 0 {
-            format!(" + {}", offset.abs())
-        } else if offset > 0 {
-            format!(" - {}", offset.abs())
-        } else {
-            "".to_owned()
-        },
+        field_name,
+        offset_operation,
         if needs_result(&length.data_type) {
             "?"
         } else {
@@ -1166,11 +1140,11 @@ fn generate_serialize_switch(
                     code.push_str(&format!(
                         "            Some({}::{}(data)) => {{\n",
                         get_field_type(&format!("{}_{}_data", struct_name, switch.field)),
-                        replace_keyword(&value)
+                        replace_keyword(value)
                     ));
-                    code.push_str(&format!(
+                    code.push_str(
                         "                data.serialize(writer)?;\n",
-                    ));
+                    );
                     code.push_str("            }\n");
             }
             None => match case.default {
@@ -1179,9 +1153,9 @@ fn generate_serialize_switch(
                         "            Some({}::Default(data)) => {{\n",
                         get_field_type(&format!("{}_{}_data", struct_name, switch.field)),
                     ));
-                    code.push_str(&format!(
+                    code.push_str(
                         "                data.serialize(writer)?;\n",
-                    ));
+                    );
                     code.push_str("            }\n");
                 }
                 _ => panic!("Unnamed switch case with default=false"),
@@ -1189,36 +1163,29 @@ fn generate_serialize_switch(
         }
     }
 
-    code.push_str(&format!("            _ => (),\n",));
+    code.push_str("            _ => (),\n",);
     code.push_str("        }\n");
 }
 
 fn generate_deserialize_length(code: &mut String, length: &Length) {
-    let optional = match length.optional {
-        Some(true) => true,
-        _ => false,
-    };
-
-    let offset = match length.offset {
-        Some(offset) => offset,
-        None => 0,
-    };
+    let optional = matches!(length.optional, Some(true));
+    let offset = length.offset.unwrap_or(0);
 
     if optional {
         code.push_str("if reader.remaining()? > 0 {{\n");
     }
 
+    let offset_operation = match offset.cmp(&0) {
+        std::cmp::Ordering::Greater => format!(" + {}", offset.abs()),
+        std::cmp::Ordering::Less => format!(" - {}", offset.abs()),
+        _ => "".to_owned(),
+    };
+
     code.push_str(&format!(
         "        let {} = (reader.get_{}()?{}) as usize;\n",
         replace_keyword(&length.name),
         length.data_type,
-        if offset > 0 {
-            format!(" + {}", offset.abs())
-        } else if offset < 0 {
-            format!(" - {}", offset.abs())
-        } else {
-            "".to_owned()
-        },
+        offset_operation,
     ));
 
     if optional {
@@ -1232,11 +1199,7 @@ fn generate_deserialize_field(
     enums: &[Enum],
     structs: &[Struct],
 ) {
-    let optional = match field.optional {
-        Some(true) => true,
-        _ => false,
-    };
-
+    let optional = matches!(field.optional, Some(true));
     if optional {
         let name = match field.name {
             Some(ref name) => name,
@@ -1245,7 +1208,7 @@ fn generate_deserialize_field(
 
         code.push_str(&format!(
             "        data.{} = if reader.remaining()? > 0 {{\n",
-            replace_keyword(&name)
+            replace_keyword(name)
         ));
         code.push_str("            Some(");
         generate_inner_field_deserialize(code, field, enums, structs);
@@ -1255,7 +1218,7 @@ fn generate_deserialize_field(
         code.push_str("        };\n");
     } else {
         if let Some(name) = &field.name {
-            code.push_str(&format!("        data.{} = ", replace_keyword(&name)));
+            code.push_str(&format!("        data.{} = ", replace_keyword(name)));
         }
         generate_inner_field_deserialize(code, field, enums, structs);
         code.push_str(";\n");
@@ -1268,11 +1231,7 @@ fn generate_deserialize_array(
     enums: &[Enum],
     structs: &[Struct],
 ) {
-    let optional = match array.optional {
-        Some(true) => true,
-        _ => false,
-    };
-
+    let optional = matches!(array.optional, Some(true));
     if optional {
         code.push_str("        if reader.remaining()? > 0 {{\n");
         generate_inner_array_deserialize(code, array, enums, structs);
@@ -1306,7 +1265,7 @@ fn generate_deserialize_switch(
                         "            {} => Some({}::{}({}::deserialize(reader)?)),\n",
                         enum_value.value,
                         get_field_type(&format!("{}_{}_data", struct_name, switch.field)),
-                        replace_keyword(&value),
+                        replace_keyword(value),
                         get_field_type(&format!(
                             "{}_{}_data_{}",
                             struct_name, switch.field, &value
@@ -1317,7 +1276,7 @@ fn generate_deserialize_switch(
                         "            {} => Some({}::{}({}::deserialize(reader)?)),\n",
                         value,
                         get_field_type(&format!("{}_{}_data", struct_name, switch.field)),
-                        replace_keyword(&value),
+                        replace_keyword(value),
                         get_field_type(&format!(
                             "{}_{}_data_{}",
                             struct_name, switch.field, &value
@@ -1338,11 +1297,8 @@ fn generate_deserialize_switch(
         }
     }
 
-    if !switch.cases.iter().any(|c| match c.default {
-        Some(true) => true,
-        _ => false,
-    }) {
-        code.push_str(&format!("            _ => None,\n",));
+    if !switch.cases.iter().any(|c| matches!(c.default, Some(true))) {
+        code.push_str("            _ => None,\n");
     }
     code.push_str("        };\n");
 }
@@ -1353,13 +1309,13 @@ fn generate_inner_field_deserialize(
     enums: &[Enum],
     structs: &[Struct],
 ) {
-    let (data_type, enum_data_type) = if field.data_type.contains(":") {
-        field.data_type.split_once(":").unwrap()
+    let (data_type, enum_data_type) = if field.data_type.contains(':') {
+        field.data_type.split_once(':').unwrap()
     } else {
         (field.data_type.as_str(), "")
     };
 
-    if let Some(ref protocol_enum) = enums.iter().find(|e| e.name == data_type) {
+    if let Some(protocol_enum) = enums.iter().find(|e| e.name == data_type) {
         // for the Foobar:short shit
         let enum_data_type = if enum_data_type.is_empty() {
             protocol_enum.data_type.to_string()
@@ -1368,34 +1324,32 @@ fn generate_inner_field_deserialize(
         };
         code.push_str(&format!(
             "{}::try_from(reader.get_{}()?)?",
-            get_field_type(&data_type),
+            get_field_type(data_type),
             enum_data_type,
         ));
-    } else if let Some(_) = structs.iter().find(|s| s.name == data_type) {
+    } else if structs.iter().any(|s| s.name == data_type) {
         code.push_str(&format!("{}::deserialize(reader)?", field.data_type));
-    } else {
-        if let Some(length) = &field.length {
-            match data_type {
-                "string" => code.push_str(&format!("        reader.get_fixed_string({})?", length)),
-                "encoded_string" => {
-                    code.push_str(&format!("        reader.get_fixed_encoded_string({})?", length))
-                }
-                _ => panic!("Unexpected length for data type: {}", data_type),
+    } else if let Some(length) = &field.length {
+        match data_type {
+            "string" => code.push_str(&format!("        reader.get_fixed_string({})?", length)),
+            "encoded_string" => {
+                code.push_str(&format!("        reader.get_fixed_encoded_string({})?", length))
             }
-        } else {
-            match data_type {
-                "blob" => code.push_str("        reader.get_bytes(reader.remaining()?)?"),
-                "bool" => code.push_str(&format!(
-                    "reader.get_{}()? == 1",
-                    if enum_data_type.is_empty() {
-                        "char"
-                    } else {
-                        enum_data_type
-                    }
-                )),
-                _ => {
-                    code.push_str(&format!("        reader.get_{}()?", data_type));
+            _ => panic!("Unexpected length for data type: {}", data_type),
+        }
+    } else {
+        match data_type {
+            "blob" => code.push_str("        reader.get_bytes(reader.remaining()?)?"),
+            "bool" => code.push_str(&format!(
+                "reader.get_{}()? == 1",
+                if enum_data_type.is_empty() {
+                    "char"
+                } else {
+                    enum_data_type
                 }
+            )),
+            _ => {
+                code.push_str(&format!("        reader.get_{}()?", data_type));
             }
         }
     }
@@ -1407,11 +1361,7 @@ fn generate_inner_array_deserialize(
     enums: &[Enum],
     structs: &[Struct],
 ) {
-    let delimited = match array.delimited {
-        Some(true) => true,
-        _ => false,
-    };
-
+    let delimited = matches!(array.delimited, Some(true));
     let need_guard = !array.trailing_delimiter && array.length.is_some();
 
     if let Some(length) = &array.length {
@@ -1474,11 +1424,7 @@ fn write_struct_fields(
 
                 field_count += 1;
 
-                let optional = match field.optional {
-                    Some(true) => true,
-                    _ => false,
-                };
-
+                let optional = matches!(field.optional, Some(true));
                 let comments = match &field.comment {
                     Some(comment) => get_comments(comment),
                     None => vec![],
@@ -1491,13 +1437,13 @@ fn write_struct_fields(
                 if optional {
                     code.push_str(&format!(
                         "    pub {}: Option<{}>,\n",
-                        replace_keyword(&field.name.as_ref().unwrap()),
+                        replace_keyword(field.name.as_ref().unwrap()),
                         get_field_type(&field.data_type)
                     ));
                 } else {
                     code.push_str(&format!(
                         "    pub {}: {},\n",
-                        replace_keyword(&field.name.as_ref().unwrap()),
+                        replace_keyword(field.name.as_ref().unwrap()),
                         get_field_type(&field.data_type)
                     ));
                 }
@@ -1540,8 +1486,8 @@ fn write_struct_fields(
 }
 
 fn get_field_type(data_type: &str) -> String {
-    if data_type.contains(":") {
-        return get_field_type(data_type.split(":").next().unwrap());
+    if data_type.contains(':') {
+        return get_field_type(data_type.split(':').next().unwrap());
     }
 
     match data_type {
@@ -1611,12 +1557,12 @@ fn find_protocol_for_type<'a>(
             match element {
                 Element::Struct(protocol_struct) => {
                     if protocol_struct.name == data_type {
-                        return Some(&path);
+                        return Some(path);
                     }
                 }
                 Element::Enum(protocol_enum) => {
                     if protocol_enum.name == data_type {
-                        return Some(&path);
+                        return Some(path);
                     }
                 }
                 _ => {}
@@ -1631,8 +1577,8 @@ fn find_unique_types(elements: &[StructElement], unique_types: &mut HashSet<Stri
     for element in elements {
         match element {
             StructElement::Field(field) => {
-                if field.data_type.contains(":") {
-                    unique_types.insert(field.data_type.split(":").next().unwrap().to_owned());
+                if field.data_type.contains(':') {
+                    unique_types.insert(field.data_type.split(':').next().unwrap().to_owned());
                 } else {
                     unique_types.insert(field.data_type.clone());
                 }

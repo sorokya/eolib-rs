@@ -29,8 +29,8 @@ impl Sequencer {
 
     /// returns the next sequence value
     pub fn next_sequence(&mut self) -> i32 {
-        let result = self.start + self.counter;
         self.counter = (self.counter + 1) % 10;
+        let result = self.start + self.counter;
         result
     }
 
@@ -75,7 +75,9 @@ pub fn get_init_sequence_start(s1: i32, s2: i32) -> i32 {
 /// used by the server for Ping packet
 pub fn get_ping_sequence_bytes(start: i32) -> [i32; 2] {
     let mut rng = rand::thread_rng();
-    let seq1 = start + rng.gen_range(0..CHAR_MAX - 1);
+    let seq1_max = start + 252;
+    let seq1_min = start;
+    let seq1 = rng.gen_range(seq1_min..=seq1_max);
     let seq2 = seq1 - start;
     [seq1, seq2]
 }

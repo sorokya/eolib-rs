@@ -232,7 +232,11 @@ impl EoReader {
 
         let mut buf = self.read_bytes(length)?.to_vec();
         decode_string(&mut buf);
-        let (cow, _, _) = WINDOWS_1252.decode(&buf);
+        let position_of_break = match buf.iter().position(|b| *b == 0xff) {
+            Some(position_of_break) => position_of_break,
+            None => length - 1,
+        };
+        let (cow, _, _) = WINDOWS_1252.decode(&buf[..position_of_break]);
         Ok(cow.to_string())
     }
 

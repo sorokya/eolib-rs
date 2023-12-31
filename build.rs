@@ -273,6 +273,11 @@ fn main() {
             mod_code.push_str("pub mod server;\n");
         }
 
+        let is_pub = path.parent().unwrap() == Path::new("eo-protocol/xml/pub");
+        if is_pub {
+            mod_code.push_str("pub mod server;\n");
+        }
+
         let mut mod_file = File::create(output_dir.join("mod.rs")).unwrap();
         mod_file.write_all(mod_code.as_bytes()).unwrap();
     }
@@ -286,6 +291,9 @@ fn generate_enum_file(
     let mut code = String::new();
     code.push_str(CODEGEN_WARNING);
 
+    code.push_str("#[cfg(feature = \"serde\")]\n");
+    code.push_str("use serde::{Deserialize, Serialize};\n\n");
+
     let comments = match protocol_enum
         .elements
         .iter()
@@ -297,6 +305,7 @@ fn generate_enum_file(
 
     append_doc_comments(&mut code, comments);
     code.push_str("#[derive(Debug, PartialEq, Eq, Copy, Clone)]\n");
+    code.push_str("#[cfg_attr(feature = \"serde\", derive(Serialize, Deserialize))]\n");
     code.push_str(&format!("pub enum {} {{\n", protocol_enum.name));
 
     let variants: Vec<&EnumValue> = protocol_enum
@@ -317,7 +326,10 @@ fn generate_enum_file(
         append_doc_comments(&mut code, comments);
         code.push_str(&format!("    {},\n", replace_keyword(&variant.name)));
     }
-    code.push_str(&format!("    Unrecognized({}),\n", get_field_type(&protocol_enum.data_type)));
+    code.push_str(&format!(
+        "    Unrecognized({}),\n",
+        get_field_type(&protocol_enum.data_type)
+    ));
     code.push_str("}\n\n");
 
     code.push_str(&format!(
@@ -339,9 +351,7 @@ fn generate_enum_file(
         ));
     }
 
-    code.push_str(
-        "            _ => Self::Unrecognized(value),\n"
-    );
+    code.push_str("            _ => Self::Unrecognized(value),\n");
     code.push_str("        }\n");
     code.push_str("    }\n");
     code.push_str("}\n\n");
@@ -408,6 +418,9 @@ fn generate_struct_file(
     let mut code = String::new();
     code.push_str(CODEGEN_WARNING);
 
+    code.push_str("#[cfg(feature = \"serde\")]\n");
+    code.push_str("use serde::{Deserialize, Serialize};\n\n");
+
     for import in &imports {
         code.push_str(&format!("{}\n", import));
     }
@@ -455,6 +468,9 @@ fn generate_packet_file(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut code = String::new();
     code.push_str(CODEGEN_WARNING);
+
+    code.push_str("#[cfg(feature = \"serde\")]\n");
+    code.push_str("use serde::{Deserialize, Serialize};\n\n");
 
     for import in &imports {
         code.push_str(&format!("{}\n", import));
@@ -519,7 +535,8 @@ fn generate_switch_code(
     enums: &[Enum],
     structs: &[Struct],
 ) {
-    code.push_str("#[derive(Debug, PartialEq, Eq)]\n");
+    code.push_str("#[derive(Debug, PartialEq, Eq, Clone)]\n");
+    code.push_str("#[cfg_attr(feature = \"serde\", derive(Serialize, Deserialize))]\n");
     code.push_str(&format!("pub enum {} {{\n", name));
     for case in switch.cases.iter().filter(|c| c.elements.is_some()) {
         match case.default {
@@ -578,13 +595,13 @@ fn write_struct(
         code.push_str(&format!("/// {}\n", comment));
     }
 
-    let mut derives = vec!["Debug", "Default", "PartialEq", "Eq"];
+    let mut derives = vec!["Debug", "Default", "PartialEq", "Eq", "Clone"];
     if name == "Coords" {
-        derives.push("Clone");
         derives.push("Copy");
     }
 
     code.push_str(&format!("#[derive({})]\n", derives.join(", ")));
+    code.push_str("#[cfg_attr(feature = \"serde\", derive(Serialize, Deserialize))]\n");
     code.push_str(&format!("pub struct {} {{\n", name));
     let field_count = write_struct_fields(code, name, elements, 0);
     code.push_str("}\n\n");
@@ -942,10 +959,10 @@ fn generate_inner_field_serialize(
             if optional {
                 replace_keyword(name)
             } else {
-                format!("self.{}", name)
+                format!("&self.{}", name)
             }
         };
-        code.push_str(&format!("{}.serialize(writer)?;\n", name))
+        code.push_str(&format!("EoSerialize::serialize({}, writer)?;\n", name))
     } else {
         match data_type {
             "blob" => code.push_str(&format!(
@@ -1147,7 +1164,7 @@ fn generate_serialize_switch(code: &mut String, struct_name: &str, switch: &Swit
                     get_field_type(&format!("{}_{}_data", struct_name, switch.field)),
                     replace_keyword(value)
                 ));
-                code.push_str("                data.serialize(writer)?;\n");
+                code.push_str("                EoSerialize::serialize(data, writer)?;\n");
                 code.push_str("            }\n");
             }
             None => match case.default {
@@ -1156,7 +1173,7 @@ fn generate_serialize_switch(code: &mut String, struct_name: &str, switch: &Swit
                         "            Some({}::Default(data)) => {{\n",
                         get_field_type(&format!("{}_{}_data", struct_name, switch.field)),
                     ));
-                    code.push_str("                data.serialize(writer)?;\n");
+                    code.push_str("                EoSerialize::serialize(data, writer)?;\n");
                     code.push_str("            }\n");
                 }
                 _ => panic!("Unnamed switch case with default=false"),
@@ -1264,34 +1281,25 @@ fn generate_deserialize_switch(
                     })
                 {
                     code.push_str(&format!(
-                        "            {} => Some({}::{}({}::deserialize(reader)?)),\n",
+                        "            {} => Some({}::{}(EoSerialize::deserialize(reader)?)),\n",
                         enum_value.value,
                         get_field_type(&format!("{}_{}_data", struct_name, switch.field)),
                         replace_keyword(value),
-                        get_field_type(&format!(
-                            "{}_{}_data_{}",
-                            struct_name, switch.field, &value
-                        ))
                     ));
                 } else {
                     code.push_str(&format!(
-                        "            {} => Some({}::{}({}::deserialize(reader)?)),\n",
+                        "            {} => Some({}::{}(EoSerialize::deserialize(reader)?)),\n",
                         value,
                         get_field_type(&format!("{}_{}_data", struct_name, switch.field)),
                         replace_keyword(value),
-                        get_field_type(&format!(
-                            "{}_{}_data_{}",
-                            struct_name, switch.field, &value
-                        ))
                     ));
                 }
             }
             None => match case.default {
                 Some(true) => {
                     code.push_str(&format!(
-                        "            _ => Some({}::Default({}::deserialize(reader)?)),\n",
+                        "            _ => Some({}::Default(EoSerialize::deserialize(reader)?)),\n",
                         get_field_type(&format!("{}_{}_data", struct_name, switch.field)),
-                        get_field_type(&format!("{}_{}_data_default", struct_name, switch.field))
                     ));
                 }
                 _ => panic!("Unnamed switch case with default=false"),
@@ -1330,7 +1338,7 @@ fn generate_inner_field_deserialize(
             enum_data_type,
         ));
     } else if structs.iter().any(|s| s.name == data_type) {
-        code.push_str(&format!("{}::deserialize(reader)?", field.data_type));
+        code.push_str("EoSerialize::deserialize(reader)?");
     } else if let Some(length) = &field.length {
         match data_type {
             "string" => code.push_str(&format!("        reader.get_fixed_string({})?", length)),
@@ -1366,18 +1374,27 @@ fn generate_inner_array_deserialize(
 ) {
     let delimited = matches!(array.delimited, Some(true));
     let need_guard = !array.trailing_delimiter && array.length.is_some();
+    let is_static_length = is_static_length(&array.length);
 
     if let Some(length) = &array.length {
         code.push_str(&format!(
             "        for {} in 0..{} {{\n",
-            if need_guard { "i" } else { "_" },
+            if need_guard || is_static_length {
+                "i"
+            } else {
+                "_"
+            },
             length
         ));
     } else {
         code.push_str("        while reader.remaining()? > 0 {\n");
     }
 
-    code.push_str(&format!("            data.{}.push(", array.name));
+    if is_static_length {
+        code.push_str(&format!("            data.{}[i] = ", array.name));
+    } else {
+        code.push_str(&format!("            data.{}.push(", array.name));
+    }
     generate_inner_field_deserialize(
         code,
         &Field {
@@ -1392,7 +1409,11 @@ fn generate_inner_array_deserialize(
         enums,
         structs,
     );
-    code.push_str(");\n");
+    if is_static_length {
+        code.push_str(";\n");
+    } else {
+        code.push_str(");\n");
+    }
 
     if delimited {
         if need_guard {
@@ -1467,11 +1488,20 @@ fn write_struct_fields(
 
                 field_count += 1;
 
-                code.push_str(&format!(
-                    "    pub {}: Vec<{}>,\n",
-                    replace_keyword(&array.name),
-                    get_field_type(&array.data_type)
-                ));
+                if is_static_length(&array.length) {
+                    code.push_str(&format!(
+                        "    pub {}: [{}; {}],\n",
+                        replace_keyword(&array.name),
+                        get_field_type(&array.data_type),
+                        array.length.as_ref().unwrap()
+                    ));
+                } else {
+                    code.push_str(&format!(
+                        "    pub {}: Vec<{}>,\n",
+                        replace_keyword(&array.name),
+                        get_field_type(&array.data_type)
+                    ));
+                }
             }
             StructElement::Switch(switch) => {
                 field_count += 1;
@@ -1486,6 +1516,16 @@ fn write_struct_fields(
     }
 
     field_count
+}
+
+fn is_static_length(length: &Option<String>) -> bool {
+    if let Some(length) = length {
+        if length.chars().all(|c| c.is_numeric()) {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn get_field_type(data_type: &str) -> String {
@@ -1538,6 +1578,7 @@ fn get_imports(elements: &[StructElement], protocols: &[(Protocol, PathBuf)]) ->
                 "eo-protocol/xml/protocol.xml" => "crate::protocol",
                 "eo-protocol/xml/map/protocol.xml" => "crate::protocol::map",
                 "eo-protocol/xml/pub/protocol.xml" => "crate::protocol::r#pub",
+                "eo-protocol/xml/pub/server/protocol.xml" => "crate::protocol::r#pub::server",
                 "eo-protocol/xml/net/protocol.xml" => "crate::protocol::net",
                 "eo-protocol/xml/net/client/protocol.xml" => "crate::protocol::net::client",
                 "eo-protocol/xml/net/server/protocol.xml" => "crate::protocol::net::server",

@@ -1,4 +1,4 @@
-use std::{cell::Cell, cmp};
+use std::cmp;
 
 use rand::Rng;
 
@@ -17,31 +17,31 @@ use crate::data::CHAR_MAX;
 /// - Account creation
 /// - Server pings
 pub struct Sequencer {
-    start: Cell<i32>,
-    counter: Cell<i32>,
+    start: i32,
+    counter: i32,
 }
 
 impl Sequencer {
     /// creates a new [Sequencer] with the specified starting value
     pub fn new(start: i32) -> Self {
-        Self {
-            start: Cell::new(start),
-            counter: Cell::new(0),
-        }
+        Self { start, counter: 0 }
     }
 
     /// returns the next sequence value
-    pub fn next_sequence(&self) -> i32 {
-        let start = self.start.get();
-        let counter = self.counter.get();
-        let result = start + counter;
-        self.counter.set((counter + 1) % 10);
+    pub fn next_sequence(&mut self) -> i32 {
+        let result = self.start + self.counter;
+        self.counter = (self.counter + 1) % 10;
         result
     }
 
     /// sets a new starting value for the sequencer
-    pub fn set_start(&self, start: i32) {
-        self.start.set(start);
+    pub fn set_start(&mut self, start: i32) {
+        self.start = start;
+    }
+
+    /// gets the current starting value for the sequencer
+    pub fn get_start(&self) -> i32 {
+        self.start
     }
 }
 

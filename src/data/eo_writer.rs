@@ -13,7 +13,7 @@ pub enum EoWriterError {
     #[error("Invalid three value {0} must be between 0 and {}", THREE_MAX)]
     InvalidThreeValue(i32),
     #[error("Invalid int value {0} must be between 0 and {}", INT_MAX)]
-    InvalidIntValue(i32),
+    InvalidIntValue(i64),
     #[error("{0}")]
     Other(String),
 }
@@ -78,7 +78,7 @@ impl EoWriter {
             return Err(EoWriterError::InvalidCharValue(char));
         }
 
-        let encoded = encode_number(char);
+        let encoded = encode_number(char)?;
         self.data.put_slice(&encoded[0..1]);
         Ok(())
     }
@@ -89,7 +89,7 @@ impl EoWriter {
             return Err(EoWriterError::InvalidShortValue(short));
         }
 
-        let encoded = encode_number(short);
+        let encoded = encode_number(short)?;
         self.data.put_slice(&encoded[0..2]);
         Ok(())
     }
@@ -100,18 +100,14 @@ impl EoWriter {
             return Err(EoWriterError::InvalidThreeValue(three));
         }
 
-        let encoded = encode_number(three);
+        let encoded = encode_number(three)?;
         self.data.put_slice(&encoded[0..3]);
         Ok(())
     }
 
     /// adds an int to the data stream
     pub fn add_int(&mut self, int: i32) -> Result<(), EoWriterError> {
-        if int < 0 {
-            return Err(EoWriterError::InvalidIntValue(int));
-        }
-
-        let encoded = encode_number(int);
+        let encoded = encode_number(int)?;
         self.data.put_slice(&encoded[0..4]);
         Ok(())
     }
@@ -207,8 +203,8 @@ mod tests {
     #[test]
     fn add_negative_int() {
         let mut writer = EoWriter::with_capacity(4);
-        let result = writer.add_int(-1).unwrap_err();
-        assert_eq!(result, EoWriterError::InvalidIntValue(-1));
+        let result = writer.add_int(-1);
+        assert_eq!(result, Ok(()));
     }
 
     #[test]
@@ -230,5 +226,12 @@ mod tests {
         let mut writer = EoWriter::with_capacity(3);
         let result = writer.add_three(THREE_MAX + 1).unwrap_err();
         assert_eq!(result, EoWriterError::InvalidThreeValue(THREE_MAX + 1));
+    }
+
+    #[test]
+    fn add_large_int() {
+        let mut writer = EoWriter::with_capacity(4);
+        let result = writer.add_int(-i32::MAX).unwrap_err();
+        assert_eq!(result, EoWriterError::InvalidIntValue(i32::MAX as i64 * 2));
     }
 }

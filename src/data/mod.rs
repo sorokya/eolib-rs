@@ -8,7 +8,7 @@ pub const SHORT_MAX: i32 = CHAR_MAX * CHAR_MAX;
 pub const THREE_MAX: i32 = CHAR_MAX * CHAR_MAX * CHAR_MAX;
 
 /// The maximum value of an EO int (4-byte encoded integer type)
-pub const INT_MAX: i32 = i32::MAX;
+pub const INT_MAX: i64 = CHAR_MAX as i64 * CHAR_MAX as i64 * CHAR_MAX as i64 * CHAR_MAX as i64;
 
 /// Returns an encoded byte array from `number`
 ///
@@ -41,7 +41,7 @@ pub const INT_MAX: i32 = i32::MAX;
 /// ```
 /// use eolib::data::encode_number;
 ///
-/// let result = encode_number(42);
+/// let result = encode_number(42).unwrap();
 /// assert_eq!(result, [43, 254, 254, 254]);
 /// ```
 /// since 42 is less than CHAR_MAX it is simply incremented by 1
@@ -50,7 +50,7 @@ pub const INT_MAX: i32 = i32::MAX;
 /// ## Number less than SHORT_MAX
 /// ```
 /// use eolib::data::encode_number;
-/// let result = encode_number(533);
+/// let result = encode_number(533).unwrap();
 /// assert_eq!(result, [28, 3, 254, 254]);
 /// ```
 ///
@@ -67,7 +67,7 @@ pub const INT_MAX: i32 = i32::MAX;
 /// ## Number less than THREE_MAX
 /// ```
 /// use eolib::data::encode_number;
-/// let result = encode_number(888888);
+/// let result = encode_number(888888).unwrap();
 /// assert_eq!(result, [100, 225, 14, 254]);
 /// ```
 ///
@@ -88,7 +88,7 @@ pub const INT_MAX: i32 = i32::MAX;
 /// ## Number less than MAX4
 /// ```
 /// use eolib::data::encode_number;
-/// let result = encode_number(18994242);
+/// let result = encode_number(18994242).unwrap();
 /// assert_eq!(result, [15, 189, 44, 2]);
 /// ```
 ///
@@ -107,28 +107,40 @@ pub const INT_MAX: i32 = i32::MAX;
 /// byte 1 is set to the the remainder + 1
 ///
 /// `(18994242 % THREE_MAX % SHORT_MAX % CHAR_MAX) + 1 // 15`
-pub fn encode_number(mut number: i32) -> [u8; 4] {
+pub fn encode_number(number: i32) -> Result<[u8; 4], EoWriterError> {
     let mut bytes: [u8; 4] = [254, 254, 254, 254];
+
+    // Unwrap negative i32 to positive i64
+    let mut number = if number < 0 {
+        number.abs() as i64 + i32::MAX as i64
+    } else {
+        number as i64
+    };
+
     let original_number = number;
 
-    if original_number >= THREE_MAX {
-        bytes[3] = (number / THREE_MAX) as u8 + 1;
-        number %= THREE_MAX;
+    if original_number >= INT_MAX {
+        return Err(EoWriterError::InvalidIntValue(original_number));
     }
 
-    if original_number >= SHORT_MAX {
-        bytes[2] = (number / SHORT_MAX) as u8 + 1;
-        number %= SHORT_MAX;
+    if original_number >= THREE_MAX as i64 {
+        bytes[3] = (number / THREE_MAX as i64) as u8 + 1;
+        number %= THREE_MAX as i64;
     }
 
-    if original_number >= CHAR_MAX {
-        bytes[1] = (number / CHAR_MAX) as u8 + 1;
-        number %= CHAR_MAX;
+    if original_number >= SHORT_MAX as i64 {
+        bytes[2] = (number / SHORT_MAX as i64) as u8 + 1;
+        number %= SHORT_MAX as i64;
+    }
+
+    if original_number >= CHAR_MAX as i64 {
+        bytes[1] = (number / CHAR_MAX as i64) as u8 + 1;
+        number %= CHAR_MAX as i64;
     }
 
     bytes[0] = number as u8 + 1;
 
-    bytes
+    Ok(bytes)
 }
 
 /// Returns a decoded number from an EO Byte array
@@ -174,10 +186,10 @@ pub fn decode_number(bytes: &[u8]) -> i32 {
         data[i] -= 1;
     }
 
-    (data[3] as i32 * THREE_MAX)
-        + (data[2] as i32 * SHORT_MAX)
-        + (data[1] as i32 * CHAR_MAX)
-        + data[0] as i32
+    ((data[3] as i32).wrapping_mul(THREE_MAX))
+        .wrapping_add((data[2] as i32).wrapping_mul(SHORT_MAX))
+        .wrapping_add((data[1] as i32).wrapping_mul(CHAR_MAX))
+        .wrapping_add(data[0] as i32)
 }
 
 /// Decodes a string in place

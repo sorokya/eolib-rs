@@ -1572,20 +1572,26 @@ fn get_imports(elements: &[StructElement], protocols: &[(Protocol, PathBuf)]) ->
         unique_types.remove(*primitive);
     }
 
+    let os_separator = std::path::MAIN_SEPARATOR;
+
+    let path_mappings: std::collections::HashMap<String, &str> = std::collections::HashMap::from([
+        (format!("eo-protocol{}xml{}protocol.xml", os_separator, os_separator), "crate::protocol"),
+        (format!("eo-protocol{}xml{}map{}protocol.xml", os_separator, os_separator, os_separator), "crate::protocol::map"),
+        (format!("eo-protocol{}xml{}pub{}protocol.xml", os_separator, os_separator, os_separator), "crate::protocol::r#pub"),
+        (format!("eo-protocol{}xml{}pub{}server{}protocol.xml", os_separator, os_separator, os_separator, os_separator), "crate::protocol::r#pub::server"),
+        (format!("eo-protocol{}xml{}net{}protocol.xml", os_separator, os_separator, os_separator), "crate::protocol::net"),
+        (format!("eo-protocol{}xml{}net{}client{}protocol.xml", os_separator, os_separator, os_separator, os_separator), "crate::protocol::net::client"),
+        (format!("eo-protocol{}xml{}net{}server{}protocol.xml", os_separator, os_separator, os_separator, os_separator),"crate::protocol::net::server"),
+    ]);
+
     for unique_type in &unique_types {
         if let Some(protocol_path) = find_protocol_for_type(unique_type, protocols) {
-            let use_path = match protocol_path.to_str().unwrap() {
-                "eo-protocol/xml/protocol.xml" => "crate::protocol",
-                "eo-protocol/xml/map/protocol.xml" => "crate::protocol::map",
-                "eo-protocol/xml/pub/protocol.xml" => "crate::protocol::r#pub",
-                "eo-protocol/xml/pub/server/protocol.xml" => "crate::protocol::r#pub::server",
-                "eo-protocol/xml/net/protocol.xml" => "crate::protocol::net",
-                "eo-protocol/xml/net/client/protocol.xml" => "crate::protocol::net::client",
-                "eo-protocol/xml/net/server/protocol.xml" => "crate::protocol::net::server",
-                _ => panic!("Unknown protocol path: {}", protocol_path.to_string_lossy()),
-            };
-
-            imports.push(format!("use {}::{};", use_path, unique_type));
+            let protocol_str = protocol_path.to_str().unwrap();
+            if let Some(use_path) = path_mappings.get(protocol_str) {
+                imports.push(format!("use {}::{};", use_path, unique_type));
+            } else {
+                panic!("Unknown protocol path: {}", protocol_path.to_string_lossy());
+            }
         }
     }
 

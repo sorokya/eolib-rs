@@ -1,6 +1,6 @@
 [package]
 name = "eolib"
-version = "1.0.0-RC9"
+version = "1.0.0-RC10"
 authors = ["Richard Leek <richard@richardleek.com>"]
 description = "A core rust library for writing applications related to Endless Online"
 edition = "2021"

@@ -32,10 +32,10 @@ impl From<String> for EoReaderError {
 /// let data = Bytes::from_static(&[1, 43, 11, 254]);
 /// let reader = EoReader::new(data);
 ///
-/// assert_eq!(reader.get_byte().unwrap(), 1);
-/// assert_eq!(reader.get_char().unwrap(), 42);
-/// assert_eq!(reader.get_short().unwrap(), 10);
-/// assert_eq!(reader.remaining().unwrap(), 0);
+/// assert_eq!(reader.get_byte(), 1);
+/// assert_eq!(reader.get_char(), 42);
+/// assert_eq!(reader.get_short(), 10);
+/// assert_eq!(reader.remaining(), 0);
 /// ```
 ///
 /// ## Chunked reading mode
@@ -51,19 +51,19 @@ impl From<String> for EoReaderError {
 ///
 /// // Reads an integer (4 bytes) but only advances the cursor by one byte, accounting for
 /// // the first chunk being a single byte.
-/// assert_eq!(reader.get_int().unwrap(), 42);
+/// assert_eq!(reader.get_int(), 42);
 ///
 /// // Advances the cursor to the next chunk
 /// reader.next_chunk().unwrap();
 ///
-/// assert_eq!(reader.get_string().unwrap(), "Hello");
+/// assert_eq!(reader.get_string(), "Hello");
 ///
 /// // Advances the cursor to the next chunk
 /// reader.next_chunk().unwrap();
 ///
 /// // Reads an integer (4 bytes) but only advances the cursor by one byte, accounting for
 /// // the last chunk
-/// assert_eq!(reader.get_int().unwrap(), 1);
+/// assert_eq!(reader.get_int(), 1);
 /// ````
 pub struct EoReader {
     data: Bytes,

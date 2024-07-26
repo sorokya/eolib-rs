@@ -8,10 +8,6 @@ use super::{decode_number, decode_string};
 
 #[derive(Error, Debug)]
 pub enum EoReaderError {
-    #[error("Expected next_break to have value")]
-    NextBreakNotFound,
-    #[error("Data not found at position {position} with length {length}")]
-    DataNotFound { position: usize, length: usize },
     #[error("Chunked reading mode is disabled")]
     ChunkedReadingDisabled,
     #[error("{0}")]
@@ -91,18 +87,18 @@ impl EoReader {
 
     /// returns the number of bytes remaining in the input data or chunk if chunked reading is
     /// enabled
-    pub fn remaining(&self) -> Result<usize, EoReaderError> {
+    pub fn remaining(&self) -> usize {
         let position = self.position.get();
         let chunked_reading_mode = self.chunked_reading_mode.get();
         if chunked_reading_mode {
             let next_break = match self.next_break.get() {
                 Some(next_break) => next_break,
-                None => return Err(EoReaderError::NextBreakNotFound),
+                None => position,
             };
 
-            Ok(next_break - cmp::min(position, next_break))
+            next_break - cmp::min(position, next_break)
         } else {
-            Ok(self.data.len() - position)
+            self.data.len() - position
         }
     }
 
@@ -133,7 +129,7 @@ impl EoReader {
 
         let next_break = match self.next_break.get() {
             Some(next_break) => next_break,
-            None => return Err(EoReaderError::NextBreakNotFound),
+            None => self.position.get(),
         };
 
         let mut position = next_break;
@@ -160,48 +156,66 @@ impl EoReader {
     /// returns a single [u8] from the data stream
     ///
     /// increases the read position by 1
-    pub fn get_byte(&self) -> Result<u8, EoReaderError> {
-        Ok(self.read_bytes(1)?[0])
+    pub fn get_byte(&self) -> u8 {
+        match self.read_bytes(1) {
+            Some(buf) => buf[0],
+            None => 0,
+        }
     }
 
     /// returns a [u8] slice from the data stream
     ///
     /// increases the read position by `length`
-    pub fn get_bytes(&self, length: usize) -> Result<Vec<u8>, EoReaderError> {
-        Ok(self.read_bytes(length)?.to_vec())
+    pub fn get_bytes(&self, length: usize) -> Vec<u8> {
+        match self.read_bytes(length) {
+            Some(buf) => buf.to_vec(),
+            None => Vec::new(),
+        }
     }
 
     /// returns a single [u8] from the data stream decoded into an [i32]
     ///
     /// increases the read position by 1
-    pub fn get_char(&self) -> Result<i32, EoReaderError> {
-        Ok(decode_number(self.read_bytes(1)?))
+    pub fn get_char(&self) -> i32 {
+        match self.read_bytes(1) {
+            Some(buf) => decode_number(buf),
+            None => 0,
+        }
     }
 
     /// returns two [u8]s from the data stream decoded into an [i32]
     ///
     /// increases the read position by 2
-    pub fn get_short(&self) -> Result<i32, EoReaderError> {
-        Ok(decode_number(self.read_bytes(2)?))
+    pub fn get_short(&self) -> i32 {
+        match self.read_bytes(2) {
+            Some(buf) => decode_number(buf),
+            None => 0,
+        }
     }
 
     /// returns three [u8]s from the data stream decoded into an [i32]
     ///
     /// increases the read position by 3
-    pub fn get_three(&self) -> Result<i32, EoReaderError> {
-        Ok(decode_number(self.read_bytes(3)?))
+    pub fn get_three(&self) -> i32 {
+        match self.read_bytes(3) {
+            Some(buf) => decode_number(buf),
+            None => 0,
+        }
     }
 
     /// returns four [u8]s from the data stream decoded into an [i32]
     ///
     /// increases the read position by 4
-    pub fn get_int(&self) -> Result<i32, EoReaderError> {
-        Ok(decode_number(self.read_bytes(4)?))
+    pub fn get_int(&self) -> i32 {
+        match self.read_bytes(4) {
+            Some(buf) => decode_number(buf),
+            None => 0,
+        }
     }
 
     /// returns a [String] from the data stream
-    pub fn get_string(&self) -> Result<String, EoReaderError> {
-        let remaining = self.remaining()?;
+    pub fn get_string(&self) -> String {
+        let remaining = self.remaining();
         self.get_fixed_string(remaining)
     }
 
@@ -209,45 +223,53 @@ impl EoReader {
     ///
     /// if `length` is `0` then an empty [String] is returned
     /// increases the read position by length
-    pub fn get_fixed_string(&self, length: usize) -> Result<String, EoReaderError> {
+    pub fn get_fixed_string(&self, length: usize) -> String {
         if length == 0 {
-            return Ok(String::new());
+            return String::new();
         }
 
-        let buf = self.read_bytes(length)?;
+        let buf = match self.read_bytes(length) {
+            Some(buf) => buf,
+            None => return String::new(),
+        };
+
         let (cow, _, _) = WINDOWS_1252.decode(buf);
-        Ok(cow.to_string())
+        cow.to_string()
     }
 
     /// returns an encoded [String] from the data stream
-    pub fn get_encoded_string(&self) -> Result<String, EoReaderError> {
-        self.get_fixed_encoded_string(self.remaining()?)
+    pub fn get_encoded_string(&self) -> String {
+        self.get_fixed_encoded_string(self.remaining())
     }
 
     /// returns an encoded [String] from the data stream with a fixed length
-    pub fn get_fixed_encoded_string(&self, length: usize) -> Result<String, EoReaderError> {
+    pub fn get_fixed_encoded_string(&self, length: usize) -> String {
         if length == 0 {
-            return Ok(String::new());
+            return String::new();
         }
 
-        let mut buf = self.read_bytes(length)?.to_vec();
+        let mut buf = match self.read_bytes(length) {
+            Some(buf) => buf.to_vec(),
+            None => return String::new(),
+        };
+
         decode_string(&mut buf);
         let position_of_break = match buf.iter().position(|b| *b == 0xff) {
             Some(position_of_break) => position_of_break,
             None => length - 1,
         };
         let (cow, _, _) = WINDOWS_1252.decode(&buf[..position_of_break]);
-        Ok(cow.to_string())
+        cow.to_string()
     }
 
-    fn read_bytes(&self, length: usize) -> Result<&[u8], EoReaderError> {
+    fn read_bytes(&self, length: usize) -> Option<&[u8]> {
         let position = self.position.get();
-        let length = cmp::min(length, self.remaining()?);
+        let length = cmp::min(length, self.remaining());
         let buf = match self.data.get(position..position + length) {
             Some(buf) => buf,
-            None => return Err(EoReaderError::DataNotFound { position, length }),
+            None => return None,
         };
         self.position.set(position + length);
-        Ok(buf)
+        Some(buf)
     }
 }

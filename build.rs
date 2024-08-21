@@ -897,9 +897,14 @@ fn generate_serialize_field(code: &mut String, field: &Field, enums: &[Enum], st
         };
 
         code.push_str(&format!(
-            "        if let Some({}) = self.{} {{\n",
+            "        if let Some({}) = self.{}{} {{\n",
             replace_keyword(name),
-            replace_keyword(name)
+            replace_keyword(name),
+            if is_primitive(&field.data_type) || enums.iter().any(|e| e.name == field.data_type) {
+                ""
+            } else {
+                ".as_ref()"
+            }
         ));
         generate_inner_field_serialize(code, field, enums, structs);
         code.push_str("        }\n");
@@ -1604,6 +1609,10 @@ static PRIMITIVE_TYPES: [&str; 9] = [
     "encoded_string",
     "blob",
 ];
+
+fn is_primitive(data_type: &str) -> bool {
+    PRIMITIVE_TYPES.contains(&data_type)
+}
 
 fn get_imports(elements: &[StructElement], protocols: &[(Protocol, PathBuf)]) -> Vec<String> {
     let mut imports = vec![

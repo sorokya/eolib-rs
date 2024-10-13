@@ -1399,10 +1399,14 @@ fn generate_inner_array_deserialize(
             length
         ));
     } else if let Some(size) = get_fixed_type_size(&array.data_type, structs, enums) {
-        code.push_str(&format!(
-            "        let num_items = reader.remaining() / {};\n",
-            size
-        ));
+        if size == 1 {
+            code.push_str("        let num_items = reader.remaining();\n");
+        } else {
+            code.push_str(&format!(
+                "        let num_items = reader.remaining() / {};\n",
+                size
+            ));
+        }
         code.push_str("        for _ in 0..num_items {\n");
     } else {
         code.push_str("        while reader.remaining() > 0 {\n");

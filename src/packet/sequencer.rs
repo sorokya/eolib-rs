@@ -30,8 +30,7 @@ impl Sequencer {
     /// returns the next sequence value
     pub fn next_sequence(&mut self) -> i32 {
         self.counter = (self.counter + 1) % 10;
-        let result = self.start + self.counter;
-        result
+        self.start + self.counter
     }
 
     /// sets a new starting value for the sequencer

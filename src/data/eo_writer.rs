@@ -259,4 +259,16 @@ mod tests {
         let result = writer.add_int(-i32::MAX).unwrap_err();
         assert_eq!(result, EoWriterError::InvalidIntValue(i32::MAX as i64 * 2));
     }
+
+    #[test]
+    fn string_sanitization_mode() {
+        let mut writer = EoWriter::new();
+        writer.add_string("ÿ");
+        assert_eq!(&writer.to_byte_array()[..], &[0xff]);
+
+        let mut writer = EoWriter::new();
+        writer.set_string_sanitization_mode(true);
+        writer.add_string("ÿ");
+        assert_eq!(&writer.to_byte_array()[..], &[0x79]);
+    }
 }

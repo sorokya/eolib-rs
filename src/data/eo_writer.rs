@@ -47,6 +47,7 @@ impl From<String> for EoWriterError {
 /// ````
 pub struct EoWriter {
     data: BytesMut,
+    string_sanitization_mode: bool,
 }
 
 impl EoWriter {
@@ -59,6 +60,7 @@ impl EoWriter {
     pub fn with_capacity(size: usize) -> Self {
         Self {
             data: BytesMut::with_capacity(size),
+            ..Default::default()
         }
     }
 
@@ -112,18 +114,41 @@ impl EoWriter {
         Ok(())
     }
 
+    fn sanitize_string(&self, string: &str) -> String {
+        if self.string_sanitization_mode {
+            string
+                .chars()
+                .map(|c| if c as i32 == 0xff { 0x79 as char } else { c })
+                .collect()
+        } else {
+            string.to_owned()
+        }
+    }
+
     /// adds a string to the data stream
     pub fn add_string(&mut self, string: &str) {
-        let (string, _, _) = WINDOWS_1252.encode(string);
+        let string = self.sanitize_string(string);
+        let (string, _, _) = WINDOWS_1252.encode(&string);
         self.data.put_slice(&string);
     }
 
     /// encodes a string and adds it to the data stream
     pub fn add_encoded_string(&mut self, string: &str) {
-        let (mut string, _, _) = WINDOWS_1252.encode(string);
+        let string = self.sanitize_string(string);
+        let (mut string, _, _) = WINDOWS_1252.encode(&string);
         let string = string.to_mut();
         encode_string(&mut *string);
         self.data.put_slice(string);
+    }
+
+    /// gets the string sanitization mode
+    pub fn get_string_sanitization_mode(&self) -> bool {
+        self.string_sanitization_mode
+    }
+
+    /// sets the string sanitization mode
+    pub fn set_string_sanitization_mode(&mut self, mode: bool) {
+        self.string_sanitization_mode = mode;
     }
 
     /// freezes the data and returns a [Bytes] object that can be freely cloned

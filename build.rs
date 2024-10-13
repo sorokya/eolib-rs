@@ -645,6 +645,9 @@ fn write_struct_serialize(
     enums: &[Enum],
     structs: &[Struct],
 ) {
+    code.push_str(
+        "        let current_string_sanitization_mode = writer.get_string_sanitization_mode();\n",
+    );
     for element in elements {
         match element {
             StructElement::Break => {
@@ -666,6 +669,7 @@ fn write_struct_serialize(
                 generate_serialize_switch(code, name, switch);
             }
             StructElement::Chunked(chunked) => {
+                code.push_str("        writer.set_string_sanitization_mode(true);\n");
                 for element in &chunked.elements {
                     match element {
                         StructElement::Break => {
@@ -695,6 +699,9 @@ fn write_struct_serialize(
             _ => {}
         }
     }
+    code.push_str(
+        "        writer.set_string_sanitization_mode(current_string_sanitization_mode);\n",
+    );
     code.push_str("        Ok(())\n");
 }
 

@@ -25,5 +25,5 @@ serde = { version = "1.0", features = ["derive"], optional = true }
 [build-dependencies]
 glob = "0.3.1"
 serde = {version = "1.0", features = ["derive"]}
-quick-xml = {version = "0.36.0", features = ["serialize", "overlapped-lists"]}
+quick-xml = {version = "0.37.0", features = ["serialize", "overlapped-lists"]}
 convert_case = "0.6.0"

@@ -6,13 +6,13 @@ use super::{encode_number, encode_string, CHAR_MAX, INT_MAX, SHORT_MAX, THREE_MA
 
 #[derive(Error, Debug, PartialEq, Eq)]
 pub enum EoWriterError {
-    #[error("Invalid char value {0} must be between 0 and {}", CHAR_MAX)]
+    #[error("Invalid char value {0} must be between 0 and {CHAR_MAX}")]
     InvalidCharValue(i32),
-    #[error("Invalid short value {0} must be between 0 and {}", SHORT_MAX)]
+    #[error("Invalid short value {0} must be between 0 and {SHORT_MAX}")]
     InvalidShortValue(i32),
-    #[error("Invalid three value {0} must be between 0 and {}", THREE_MAX)]
+    #[error("Invalid three value {0} must be between 0 and {THREE_MAX}")]
     InvalidThreeValue(i32),
-    #[error("Invalid int value {0} must be between 0 and {}", INT_MAX)]
+    #[error("Invalid int value {0} must be between 0 and {INT_MAX}")]
     InvalidIntValue(i64),
     #[error("{0}")]
     Other(String),

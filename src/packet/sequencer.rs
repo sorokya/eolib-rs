@@ -1,8 +1,6 @@
 use std::cmp;
 
-use rand::RngExt;
-
-use crate::data::CHAR_MAX;
+use crate::{data::CHAR_MAX, rng};
 
 #[derive(Debug)]
 /// Used for packet sequencing
@@ -52,18 +50,16 @@ impl Sequencer {
 
 /// returns a random sequence start value
 pub fn generate_sequence_start() -> i32 {
-    let mut rng = rand::rng();
-    rng.random_range(0..=CHAR_MAX - 10)
+    rng::internal_rand_range(0..(CHAR_MAX - 10) as u32) as i32
 }
 
 /// returns sequence bytes from a starting value
 ///
 /// used by the server for Init_Init packet
 pub fn get_init_sequence_bytes(start: i32) -> [i32; 2] {
-    let mut rng = rand::rng();
     let seq1_min = cmp::max(0, (start - (CHAR_MAX - 1) + 13 + 6) / 7);
     let seq1_max = (start + 13) / 7;
-    let seq1 = rng.random_range(0..=seq1_max - seq1_min) + seq1_min;
+    let seq1 = rng::internal_rand_range(0..(seq1_max - seq1_min) as u32) as i32 + seq1_min;
     let seq2 = start - seq1 * 7 + 13;
     [seq1, seq2]
 }
@@ -79,10 +75,9 @@ pub fn get_init_sequence_start(s1: i32, s2: i32) -> i32 {
 ///
 /// used by the server for Ping packet
 pub fn get_ping_sequence_bytes(start: i32) -> [i32; 2] {
-    let mut rng = rand::rng();
     let seq1_max = start + 252;
     let seq1_min = start;
-    let seq1 = rng.random_range(seq1_min..=seq1_max);
+    let seq1 = rng::internal_rand_range(seq1_min as u32..seq1_max as u32) as i32;
     let seq2 = seq1 - start;
     [seq1, seq2]
 }
@@ -96,7 +91,11 @@ pub fn get_ping_sequence_start(s1: i32, s2: i32) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::Sequencer;
+    use super::{
+        Sequencer, generate_sequence_start, get_init_sequence_bytes, get_init_sequence_start,
+        get_ping_sequence_bytes, get_ping_sequence_start,
+    };
+    use crate::data::CHAR_MAX;
 
     #[test]
     fn next_sequence_returns_start_before_incrementing() {
@@ -127,5 +126,29 @@ mod tests {
         sequencer.set_start(50);
         // Counter is still 1, so the next value is 50 + 1.
         assert_eq!(sequencer.next_sequence(), 51);
+    }
+
+    #[test]
+    fn generate_sequence_start_stays_within_bounds() {
+        for _ in 0..1000 {
+            let start = generate_sequence_start();
+            assert!((0..=CHAR_MAX - 10).contains(&start));
+        }
+    }
+
+    #[test]
+    fn init_sequence_bytes_round_trip() {
+        for start in [0, 1, 13, 100, CHAR_MAX - 10] {
+            let [s1, s2] = get_init_sequence_bytes(start);
+            assert_eq!(get_init_sequence_start(s1, s2), start);
+        }
+    }
+
+    #[test]
+    fn ping_sequence_bytes_round_trip() {
+        for start in [0, 1, 100, CHAR_MAX - 10] {
+            let [s1, s2] = get_ping_sequence_bytes(start);
+            assert_eq!(get_ping_sequence_start(s1, s2), start);
+        }
     }
 }

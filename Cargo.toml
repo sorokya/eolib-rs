@@ -1,6 +1,6 @@
 [package]
 name = "eolib"
-version = "3.1.0"
+version = "3.2.0"
 authors = ["Richard Leek <richard@richardleek.com>"]
 description = "A core rust library for writing applications related to Endless Online"
 edition = "2024"
@@ -14,9 +14,8 @@ exclude = [".github"]
 serde = ["dep:serde"]
 
 [dependencies]
-bytes = "1.11"
+bytes = "1.12"
 encoding_rs = "0.8"
-rand = "0.10"
 thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"], optional = true }
 

@@ -1,3 +1,6 @@
 [submodule "eo-protocol"]
 	path = eo-protocol
 	url = https://github.com/Cirras/eo-protocol.git
+[submodule "eo-captured-packets"]
+	path = eo-captured-packets
+	url = https://github.com/ethanmoffat/eo-captured-packets.git

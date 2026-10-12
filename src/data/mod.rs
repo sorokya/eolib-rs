@@ -10,6 +10,10 @@ pub const THREE_MAX: i32 = CHAR_MAX * CHAR_MAX * CHAR_MAX;
 /// The maximum value of an EO int (4-byte encoded integer type)
 pub const INT_MAX: i64 = CHAR_MAX as i64 * CHAR_MAX as i64 * CHAR_MAX as i64 * CHAR_MAX as i64;
 
+/// The multiplier each decoded byte is scaled by, by its position in the
+/// number: `1`, [CHAR_MAX], [SHORT_MAX], [THREE_MAX].
+const DIGIT_MULTIPLIERS: [i32; 4] = [1, CHAR_MAX, SHORT_MAX, THREE_MAX];
+
 /// Returns an encoded byte array from `number`
 ///
 /// EO uses a maximum of four bytes to represent a number
@@ -20,7 +24,13 @@ pub const INT_MAX: i64 = CHAR_MAX as i64 * CHAR_MAX as i64 * CHAR_MAX as i64 * C
 /// see [CHAR_MAX], [SHORT_MAX], [THREE_MAX]
 ///
 /// The four bytes are initialized with a value of 254.
-/// This is used later in [decode_number] for translating to a 0 value.
+/// This is the padding [decode_number] stops at, and never a digit: the encoder
+/// writes `digit + 1`, which is at most 253.
+///
+/// The number of bytes the field actually occupies is up to the caller: a
+/// packet field of `n` bytes uses the first `n` of them ([EoWriter::add_char]
+/// and friends), and two numbers in one field are never confused for one
+/// another.
 ///
 /// Bytes 4, 3, and 2 are set as follows if `number` is greater than or equal to
 /// the corresponding `MAX` constant.
@@ -153,12 +163,19 @@ pub fn encode_number(number: i32) -> Result<[u8; 4], EoWriterError> {
 ///
 /// If you provide less than four than the remaining bytes default to 254
 ///
-/// The byte array is iterated over and any byte of 254 is changed to 1, and
-/// each byte is decremented by 1.
+/// The byte array is iterated over and each byte is decremented by 1, then
+/// multiplied by the multiplier for its position and summed.
 ///
 /// The result is then calculated like so
 ///
 /// `(b4 * THREE_MAX) + (b3 * SHORT_MAX) + (b2 * CHAR_MAX) + b1`
+///
+/// A byte of `254` **terminates** the number rather than contributing a digit:
+/// the encoder pads with `254` past the significant bytes, so nothing of value
+/// can follow one. This matches `EO_DecodeNumber`, which breaks out of its loop
+/// on `0xfe` (see [encoding.md](../eo-protocol/docs/encoding.md#decode)), so a
+/// `254` followed by a significant byte decodes to the bytes before it, not
+/// through it.
 ///
 /// # Examples
 /// ```
@@ -167,29 +184,30 @@ pub fn encode_number(number: i32) -> Result<[u8; 4], EoWriterError> {
 /// assert_eq!(result, 42);
 /// ```
 ///
-/// * bytes with `254` are swapped to `1`
-///   `[43, 1, 1, 1]`
-/// * bytes are decremented by 1
-///   `[42, 0, 0, 0]`
-/// * bytes are multiplied by MAX's and summed
-///   `(0 * THREE_MAX) + (0 * SHORT_MAX) + (0 * CHAR_MAX) + 42 == 42`
+/// * the first byte is decremented by 1
+///   `[42, 254, 254, 254]`
+/// * the `254` at index 0 terminates the number, so the rest is padding
+/// * the result is `42`
 ///
+/// ```
+/// # use eolib::data::decode_number;
+/// // Two digits: 28 - 1 = 27, then (3 - 1) * CHAR_MAX.
+/// assert_eq!(decode_number(&[28, 3, 254, 254]), 533);
+/// // The padding stops the decode even when bytes follow it.
+/// assert_eq!(decode_number(&[28, 254, 3, 3]), 27);
+/// ```
 pub fn decode_number(bytes: &[u8]) -> i32 {
-    let mut data: [u8; 4] = [254, 254, 254, 254];
-    for i in 0..4 {
-        if bytes.len() > i && bytes[i] != 0 {
-            data[i] = bytes[i];
+    let mut result: i32 = 0;
+    for (i, &byte) in bytes.iter().take(4).enumerate() {
+        if byte == 254 {
+            break;
         }
-        if data[i] == 254 {
-            data[i] = 1;
-        }
-        data[i] -= 1;
+        // A zero byte (which a well-formed stream never carries) subtracts one,
+        // as the client's `int b = ch; b -= 1;` does.
+        result = result.wrapping_add((i32::from(byte) - 1).wrapping_mul(DIGIT_MULTIPLIERS[i]));
     }
 
-    ((data[3] as i32).wrapping_mul(THREE_MAX))
-        .wrapping_add((data[2] as i32).wrapping_mul(SHORT_MAX))
-        .wrapping_add((data[1] as i32).wrapping_mul(CHAR_MAX))
-        .wrapping_add(data[0] as i32)
+    result
 }
 
 /// Decodes a string in place
@@ -257,3 +275,54 @@ mod eo_writer;
 pub use eo_writer::{EoWriter, EoWriterError};
 mod eo_serialize;
 pub use eo_serialize::{EoSerialize, EoSerializeError};
+
+#[cfg(test)]
+mod tests {
+    use super::{CHAR_MAX, SHORT_MAX, THREE_MAX, decode_number, encode_number};
+
+    #[test]
+    fn encode_spreads_the_value_across_four_bytes() {
+        assert_eq!(encode_number(42).unwrap(), [43, 254, 254, 254]);
+        assert_eq!(encode_number(533).unwrap(), [28, 3, 254, 254]);
+        assert_eq!(encode_number(888888).unwrap(), [100, 225, 14, 254]);
+        assert_eq!(encode_number(18994242).unwrap(), [15, 189, 44, 2]);
+        // The largest value each position can hold.
+        let max = CHAR_MAX as u8;
+        assert_eq!(encode_number(CHAR_MAX - 1).unwrap(), [max, 254, 254, 254]);
+        assert_eq!(encode_number(SHORT_MAX - 1).unwrap(), [max, max, 254, 254]);
+        assert_eq!(encode_number(THREE_MAX - 1).unwrap(), [max, max, max, 254]);
+    }
+
+    #[test]
+    fn decode_reads_what_encode_wrote() {
+        for value in [0, 1, 42, 252, 253, 533, 888888, 18994242, THREE_MAX - 1] {
+            assert_eq!(decode_number(&encode_number(value).unwrap()), value);
+        }
+    }
+
+    #[test]
+    fn decode_stops_at_the_padding_byte() {
+        assert_eq!(decode_number(&[43, 254, 254, 254]), 42);
+        assert_eq!(decode_number(&[28, 3, 254, 254]), 533);
+        assert_eq!(decode_number(&[15, 189, 44, 2]), 18994242);
+        // Everything after the first 254 is padding, not a digit.
+        assert_eq!(decode_number(&[43, 254, 5, 5]), 42);
+        assert_eq!(decode_number(&[28, 254, 3, 3]), 27);
+        assert_eq!(decode_number(&[254, 3, 3, 3]), 0);
+    }
+
+    #[test]
+    fn decode_uses_only_the_first_four_bytes() {
+        assert_eq!(decode_number(&[43, 254]), 42);
+        assert_eq!(decode_number(&[]), 0);
+        let all_four = 42 * (1 + CHAR_MAX + SHORT_MAX + THREE_MAX);
+        assert_eq!(decode_number(&[43, 43, 43, 43, 43]), all_four);
+    }
+
+    #[test]
+    fn decode_subtracts_one_from_a_zero_byte() {
+        // A well-formed stream never carries one (the encoder writes digit + 1),
+        // but the client's `int b = ch; b -= 1;` gives -1 for it.
+        assert_eq!(decode_number(&[0]), -1);
+    }
+}

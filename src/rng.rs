@@ -1,9 +1,25 @@
 //! A pseudo-random number generator that faithfully emulates the one used by the
 //! original 32-bit Borland EO game client.
 //!
-//! This is a dual-state linear congruential generator with two 32-bit state words
-//! (`seed` and `high`) that together give it an effective period far longer than a
-//! classic single-register LCG.
+//! The client links the Borland C++ 5.5 C runtime's `rand.c`
+//! (`ref/Borland5/Source/RTL/source/math/rand.c` in the Endless Online
+//! decompilation), which supplies three entry points:
+//!
+//! - `srand(seed)` — stores the seed and primes it with one `rand()`;
+//! - `rand()` — a 32-bit multiplicative congruential generator over `Seed.lo`
+//!   whose result is bits 16..30 (0..2¹⁵-1). The client never calls this, but
+//!   `srand` does, so it moves the state;
+//! - `_lrand()` — the dual-state generator below, returning 0..2³¹-1. The
+//!   client's `random(n)` macro is `_lrand() % n`.
+//!
+//! [`Rng::rand`] is `_lrand`: the name predates this documentation, and the
+//! thread-local C-shaped API ([`srand`]/[`rand`]) mirrors it. `_lrand` is
+//! **not** a textbook 64-bit `Seed = 0x015A4E35 * Seed + 1`; it is the inline
+//! assembly in `rand.c`, which multiplies the two state words separately and
+//! discards the parts the assembly drops. [`Rng::rand`] reproduces that
+//! instruction for instruction, because the sequence is observable: the client
+//! seeds with `srand(time(0))` and reads `random(n)` for things like the
+//! softpad's anti-keylogger jump and the weapon sounds.
 //!
 //! All arithmetic intentionally wraps on overflow (matching the original client's
 //! use of unsigned 32-bit integer overflow), so [`wrapping_add`](u32::wrapping_add)
@@ -64,7 +80,10 @@
 
 use std::{cell::RefCell, ops::Range};
 
-/// An instance of the dual-state LCG used by the original EO game client.
+/// An instance of the dual-state generator the original EO game client uses
+/// (`_lrand`, `src/rng.rs`'s module docs).
+///
+/// The fields are `rand.c`'s `Seed.lo` and `Seed.hi`.
 ///
 /// Unlike the free functions in this module, an `Rng` owns its state directly
 /// rather than storing it in a thread-local, so it can be freely moved, cloned,
@@ -73,18 +92,32 @@ use std::{cell::RefCell, ops::Range};
 ///
 /// # Examples
 ///
+/// The vectors below are the runtime's own for `srand(1)`, verified against the
+/// `_lrand` assembly in the reference client's image:
+///
 /// ```
 /// use eolib::rng::Rng;
 ///
 /// let mut rng = Rng::new(1);
-/// assert_eq!(rng.rand(), 1367424485);
-/// assert_eq!(rng.rand(), 18557838);
+/// assert_eq!(rng.rand(), 1410184549);
+/// assert_eq!(rng.rand(), 672584604);
+/// assert_eq!(rng.rand(), 1915668986);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rng {
+    /// `Seed.lo`.
     seed: u32,
+    /// `Seed.hi`.
     high: u32,
 }
+
+/// `MULTIPLIER` (`rand.c`), and its two 16-bit halves, which `_lrand`'s
+/// assembly multiplies by separately.
+const MULTIPLIER: u32 = 0x015a_4e35;
+const MULTIPLIER_HIGH: u32 = 0x015a;
+const MULTIPLIER_LOW: u32 = 0x4e35;
+/// `INCREMENT`.
+const INCREMENT: u32 = 1;
 
 impl Rng {
     /// Creates a new [`Rng`] seeded with a 32-bit unsigned integer.
@@ -115,41 +148,74 @@ impl Rng {
     /// assert_eq!(a, b);
     /// ```
     pub fn seed(&mut self, new_seed: u32) {
-        self.seed = 0x1586B75u32.wrapping_mul(new_seed).wrapping_add(1);
+        // `rand.c`'s `srand`: `Seed.lo = seed; Seed.hi = 0; rand();` — the seed
+        // is the low word, and the first `rand()` scrambles it so the first
+        // value is not as random as the ones after it.
+        self.seed = new_seed;
         self.high = 0;
+        self.rand_15bit();
+    }
+
+    /// `rand()`: the 32-bit generator over `Seed.lo`, returning bits 16..30.
+    ///
+    /// `srand` primes with one call, which is the only place the reference
+    /// client reaches it: the game uses `random(n)`, i.e. [`Rng::rand`].
+    fn rand_15bit(&mut self) -> u32 {
+        self.seed = MULTIPLIER.wrapping_mul(self.seed).wrapping_add(INCREMENT);
+        (self.seed >> 16) & 0x7fff
     }
 
     /// Generates a pseudo-random 31-bit unsigned integer in the range
     /// `[0, 2147483647]`.
     ///
-    /// The sequence of numbers generated depends on the seed this [`Rng`] was
-    /// created or last seeded with.
+    /// This is `_lrand`. The sequence of numbers generated depends on the seed
+    /// this [`Rng`] was created or last seeded with.
     pub fn rand(&mut self) -> u32 {
-        let tmp_state_product = if self.high != 0 {
-            self.high.wrapping_mul(20021)
+        // `_lrand`'s inline assembly, instruction for instruction:
+        //
+        //     eax = hi; ecx = 0x15A; ebx = 0x4E35;
+        //     if (hi) { edx:eax = hi * 0x4E35 }   // only eax (low word) is kept
+        //     xchg ecx, eax; edx:eax = 0x15A * lo // only eax (low word) is kept
+        //     eax += ecx;
+        //     xchg eax, esi; edx:eax = lo * 0x4E35;
+        //     edx += esi; eax += 1; adc edx, 0;
+        //     Seed.lo = eax; Seed.hi = edx; return edx & 0x7FFFFFFF;
+        //
+        // Note what the assembly does *not* do: `hi * 0x4E35` contributes its
+        // low word only, the `0x15A * lo` carry is dropped, and the add is a
+        // plain 32-bit one. A textbook `Seed = MULTIPLIER * Seed + 1` over a
+        // 64-bit `Seed` gives a different sequence.
+        let (high, low) = (self.high, self.seed);
+
+        let cross = if high != 0 {
+            high.wrapping_mul(MULTIPLIER_LOW)
         } else {
             0
         };
-        let tmp_seed_product = self.seed.wrapping_mul(346);
+        let rotated = MULTIPLIER_HIGH.wrapping_mul(low);
+        let sum = rotated.wrapping_add(cross);
 
-        let full_product: u64 = (self.seed as u64) * 20021;
+        let product = u64::from(low) * u64::from(MULTIPLIER_LOW);
+        let product_low = product as u32;
+        let product_high = ((product >> 32) as u32).wrapping_add(sum);
 
-        let seed_lo = (full_product as u32).wrapping_add(1);
-        let seed_hi = (full_product >> 32) as u32;
-        let seed_hi = seed_hi
-            .wrapping_add(tmp_state_product)
-            .wrapping_add(tmp_seed_product);
+        let (seed_low, carry) = product_low.overflowing_add(INCREMENT);
+        let seed_high = product_high.wrapping_add(u32::from(carry));
 
-        self.seed = seed_lo;
-        self.high = seed_hi;
+        self.seed = seed_low;
+        self.high = seed_high;
 
-        seed_hi & 0x7FFFFFFF
+        seed_high & 0x7fff_ffff
     }
 
     /// Generates a pseudo-random unsigned integer within the inclusive range
     /// `[min, max]`.
     ///
     /// If `min` is greater than `max`, `min` is returned unchanged.
+    ///
+    /// The range's end **is** included, so `rand_range(0..n)` spans `n + 1`
+    /// values. The client's `random(n)` macro is `_lrand() % n`, i.e.
+    /// `rand_range(0..n - 1)`; use this to model it.
     ///
     /// The sequence of numbers generated depends on the seed this [`Rng`] was
     /// created or last seeded with.
@@ -242,8 +308,8 @@ pub fn srand(new_seed: u32) {
 /// use eolib::rng::{srand, rand};
 ///
 /// srand(1);
-/// assert_eq!(rand(), 1367424485);
-/// assert_eq!(rand(), 18557838);
+/// assert_eq!(rand(), 1410184549);
+/// assert_eq!(rand(), 672584604);
 /// ```
 pub fn rand() -> u32 {
     STATE.with_borrow_mut(|rng| rng.rand())
@@ -289,20 +355,23 @@ mod tests {
 
     #[test]
     fn rand_matches_known_sequence() {
-        // Values captured from the reference eolib-c implementation.
+        // The runtime's own values: `srand` and `rand` from
+        // `ref/Borland5/Source/RTL/source/math/rand.c`, and `_lrand` from the
+        // assembly in that file, which the reference client carries verbatim
+        // (`mov ecx, 0x15a` / `mov ebx, 0x4e35` at 0x217e98).
         srand(1);
-        assert_eq!(rand(), 1367424485);
-        assert_eq!(rand(), 18557838);
-        assert_eq!(rand(), 438012954);
-        assert_eq!(rand(), 1351954191);
-        assert_eq!(rand(), 2046927527);
+        assert_eq!(rand(), 1410184549);
+        assert_eq!(rand(), 672584604);
+        assert_eq!(rand(), 1915668986);
+        assert_eq!(rand(), 576821944);
+        assert_eq!(rand(), 167078712);
 
         srand(12345);
-        assert_eq!(rand(), 1628244379);
-        assert_eq!(rand(), 205855945);
-        assert_eq!(rand(), 1598090830);
-        assert_eq!(rand(), 423792828);
-        assert_eq!(rand(), 1122741425);
+        assert_eq!(rand(), 1220244142);
+        assert_eq!(rand(), 1374406965);
+        assert_eq!(rand(), 308141128);
+        assert_eq!(rand(), 1558318993);
+        assert_eq!(rand(), 598390725);
 
         srand(0);
         assert_eq!(rand(), 346);
@@ -311,13 +380,21 @@ mod tests {
         assert_eq!(rand(), 816282396);
         assert_eq!(rand(), 1778554774);
 
-        // A seed chosen to exercise wraparound in the seed-scrambling multiply.
+        // A seed chosen to exercise wraparound in the priming multiply.
         srand(u32::MAX);
-        assert_eq!(rand(), 780079875);
-        assert_eq!(rand(), 409992358);
-        assert_eq!(rand(), 738360963);
-        assert_eq!(rand(), 1473119578);
-        assert_eq!(rand(), 1009212074);
+        assert_eq!(rand(), 737319811);
+        assert_eq!(rand(), 1903449241);
+        assert_eq!(rand(), 1408188579);
+        assert_eq!(rand(), 100768176);
+        assert_eq!(rand(), 741577241);
+    }
+
+    #[test]
+    fn rand_is_not_the_textbook_64_bit_lcg() {
+        // `Seed = MULTIPLIER * Seed + 1` over a 64-bit `Seed` would give these
+        // values; the assembly drops the cross terms, so it must not.
+        srand(1);
+        assert_ne!(rand(), 1367424485);
     }
 
     #[test]
@@ -374,9 +451,9 @@ mod tests {
         // Same reference vectors as the free-function tests: the struct and the
         // thread-local free functions share the exact same algorithm.
         let mut rng = Rng::new(1);
-        assert_eq!(rng.rand(), 1367424485);
-        assert_eq!(rng.rand(), 18557838);
-        assert_eq!(rng.rand(), 438012954);
+        assert_eq!(rng.rand(), 1410184549);
+        assert_eq!(rng.rand(), 672584604);
+        assert_eq!(rng.rand(), 1915668986);
     }
 
     #[test]
